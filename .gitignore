@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# uv / venv  (uv.lock IS committed; .venv is environment-local, never committed)
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Downloaded models & data (target of scripts/download_model.sh)
+/shared/
+models/
+*.safetensors
+*.bin
+
+# Quantization / evaluation outputs
+out/
+results/
+*.log
+
+# OS
+.DS_Store

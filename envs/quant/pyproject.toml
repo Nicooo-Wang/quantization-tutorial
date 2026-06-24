@@ -1,0 +1,25 @@
+[project]
+name = "quant-env"
+version = "0.1.0"
+description = "Quantization env A (llm-compressor oneshot: FP8 / AWQ / SmoothQuant). Kept separate from the deploy env so vLLM does not lock the transformers version here."
+requires-python = ">=3.10,<3.13"
+# Lower bounds verified against PyPI (June 2026). The exact pinned graph lives
+# in uv.lock — `uv lock` + `uv sync` materialize it. Do NOT add torch: the vLLM
+# wheel ships a CUDA-12.8-matched torch, and adding torch separately overrides
+# that build and breaks FP8/INT8 kernels.
+dependencies = [
+    "vllm>=0.11.0",            # PyPI is still 0.x (0.23.x as of Jun 2026); 'CalVer 25.x' refers to the NGC container tag, NOT the PyPI package
+    "llmcompressor>=0.9.0",    # >=0.7 needed for mixed-precision config_groups; pin 0.9+ for the modern QuantizationModifier API (PyPI latest 0.12.0, which requires transformers v5)
+    "compressed-tensors>=0.10",
+    "lm-eval>=0.4.5",          # core no longer bundles model backends -> ALSO run `uv pip install --python envs/quant/.venv/bin/python 'lm_eval[vllm]'` for the vLLM eval backend
+    "accelerate>=1.0",         # device_map / multi-gpu load during oneshot
+    "datasets>=2.20",
+    "transformers>=5.0",       # llmcompressor 0.12 requires transformers v5
+    "safetensors>=0.4",
+    "sentencepiece>=0.2",
+    "huggingface-hub[hf-transfer]>=0.26",  # hf_transfer = fast downloads; pulls hf-transfer
+]
+
+[tool.uv]
+[tool.uv.pip]
+# Let the vLLM wheel choose torch; never let uv downgrade it.
