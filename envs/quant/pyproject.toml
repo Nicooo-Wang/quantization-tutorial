@@ -18,6 +18,10 @@ dependencies = [
     "safetensors>=0.4",
     "sentencepiece>=0.2",
     "huggingface-hub[hf-transfer]>=0.26",  # hf_transfer = fast downloads; pulls hf-transfer
+    "ipytest>=0.14",           # notebook 内跑 pytest（隔离测试填空）
+    "nbval>=0.11",             # pytest --nbval 执行 notebook 做输出回归
+    "nbconvert>=7.0",          # nbconvert --execute / --clear-output
+    "jupyter>=1.0",            # 学员交互跑 notebook
 ]
 
 [tool.uv]
