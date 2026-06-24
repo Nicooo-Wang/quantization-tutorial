@@ -23,9 +23,9 @@
 
 | 决策点 | 选择 |
 |--------|------|
-| 交付形态 | **混合**：`.py` + `.ipynb`，经 **jupytext 配对**（`py:percent`）—— 单一源、双产物 |
+| 交付形态 | **notebook-only**：每个 Step 一个 `.ipynb`（就是那堂课），测试用 **ipytest** 写在 cell 里；无 `.py` lesson 脚本、无 jupytext |
 | student 试课 | **agent**，在 **git worktree** 里**真跑 H200**，评估**代码 + 课程设计** |
-| 测试架构 | **逻辑层/执行层分离 + 三层测试（L1/L2/L3）**（方案 A） |
+| 测试架构 | **三层测试都在 notebook 内**（L1 ipytest / L2 tiny 真模型 / L3 H200 执行 cell） |
 | 开发主体 | **单个开发专家**开发整模块（不并行分 Step） |
 | student 反馈 | 同时给**架构师和评审员**；循环到**学生满意** |
 
@@ -36,49 +36,40 @@ quantization-tutorial/
 ├── OUTLINE.md                          # 已有，课程总纲
 ├── envs/{quant,deploy}/                # 已有，uv 双 env
 ├── scripts/{setup_env,download_model}.sh  # 已有
-├── pyproject.toml                      # 新增（顶层）：[tool.pytest.ini_options] 等
 ├── course/                             # 新增：课程内容
-│   ├── conftest.py                     # 共享 fixtures：tiny 模型 / 合成校准数据 / tmp 路径
-│   ├── _tiny/                          # tiny Qwen2 配置（2 层、hidden≈64，内存随机初始化，不下 7B）
 │   ├── m2-quant-pipeline/              # 模块 = lesson（M2 为试水模块）
 │   │   ├── README.md                   # 本课导读（对应 OUTLINE M2）
-│   │   ├── steps/
-│   │   │   ├── s1_env.py + s1_env.ipynb        # jupytext 配对
-│   │   │   ├── s2_fp8_quant.py + .ipynb
-│   │   │   ├── s3_awq_quant.py + .ipynb
-│   │   │   ├── s4_smoothquant.py + .ipynb
-│   │   │   └── s5_outputs_format.py + .ipynb
-│   │   └── tests/
-│   │       ├── test_s2_logic.py               # L1 + L2 UT（CPU，快）
-│   │       └── test_s2_h200.py                # L3 smoke（@pytest.mark.h200）
+│   │   └── steps/
+│   │       ├── s1_env.ipynb            # 一个 Step = 一个 notebook（自包含）
+│   │       ├── s2_fp8_quant.ipynb
+│   │       ├── s3_awq_quant.ipynb
+│   │       ├── s4_smoothquant.ipynb
+│   │       └── s5_outputs_format.ipynb
 │   ├── m1-activation-outliers/
 │   ├── m3-tuning-eval/
 │   └── m4-deploy-loop/
-└── tests/                              # 顶层共享 / 跨模块测试
 ```
 
-- 测试在 **`envs/quant`** 环境跑：`source envs/quant/.venv/bin/activate && pytest course/`。
-- `.py` 与 `.ipynb` 由 jupytext 绑定：改 `.py`（`py:percent`，`# %%` cell 标记）→ `jupytext --sync` 更新 `.ipynb`。`.py` 是合法 Python，直接进 pytest；`.ipynb` 是教学产物。
+- 每个 `.ipynb` **自包含**：markdown 讲解 cell + 代码 cell（`logic` + `execution`）+ **ipytest 测试 cell**（L1）+ **tiny 模型验证 cell**（L2，CPU）+ **H200 执行 cell**（L3，GPU 守卫）。
+- **无** `.py` lesson 脚本、jupytext 配对、`conftest.py` / `tests/` 目录；tiny 模型作为 setup cell 内联在每个 notebook（自包含、便于教学）。
+- 测试在 **`envs/quant`** 跑：学员在 Jupyter 里直接跑 cell；headless 用 `uv run --directory envs/quant jupyter nbconvert --execute <notebook>` 或 `pytest --nbval`。
+- notebook 提交前清输出（`nbconvert --clear-output`），保 git 干净；学员自己跑产生输出。
 
-## 5. Step + UT 架构（三层测试）
+## 5. Step + UT 架构（notebook-only，三层测试都在 notebook 内）
 
-每个 Step 的 `.py` 分两部分：
-- **`logic`**：纯函数，不碰 GPU / 大模型。如 `build_fp8_recipe()`、`compute_smooth_scale(x, alpha)`、`validate_quant_config(cfg)`、`parse_kquant_suffix(name)`。
-- **`execution`**：真跑。如 `run_fp8_quantize(model_id, out_dir)`。
+每个 Step = 一个 `.ipynb`，含几类 cell：
 
-配对的 `.ipynb` = narrative 包裹 `execution` cell。
+- **markdown 讲解 cell**：原理 + 这步做什么。
+- **代码 cell**：`logic`（纯函数：`build_fp8_recipe()`、`compute_smooth_scale(x, α)`、`validate_quant_config(cfg)`、`parse_kquant_suffix(name)`）+ `execution`（真跑：`run_fp8_quantize(model_id, out_dir)`）。
+- **ipytest 测试 cell（L1）**：用 `%%ipytest` 或 `ipytest.run()` 写 `def test_x(): assert ...`，**隔离执行**（避免 cell 间状态串扰导致的假通过）—— 满足 C1"每步配 UT"，学员写完函数直接跑这个 cell 验证。
+- **tiny 模型验证 cell（L2）**：内存里 `Qwen2ForCausalLM(Qwen2Config(num_hidden_layers=2, hidden_size=64, ...))`（随机初始化、不下 7B）+ 真跑 llmcompressor + `assert`，CPU 秒级。用**真库跑真架构（只是小）**，框架级 bug 在 CPU 就被抓 —— 正中 C2，且是很好的教学（"上 7B 前先用小模型验证"）。
+- **H200 执行 cell（L3）**：真 Qwen2.5-0.5B 再 7B 跑该 Step，`if torch.cuda.is_available():` 守卫（无 GPU 自动跳过），断言跑通 + 输出合理。
 
-**三层测试，层层兜底 C2（框架级跑不通）：**
+三层都在 notebook 内（不再分文件），层层兜底 C2：
 
-| 层 | 文件 | 环境 | 跑什么 | 目的 | 进 CI |
-|----|------|------|--------|------|-------|
-| **L1 逻辑 UT** | `test_*_logic.py` | CPU，秒级 | 纯函数 + tiny 张量 | 验证算法/解析/校验逻辑 | ✅ 默认 |
-| **L2 tiny 真模型 UT** | `test_*_logic.py` | CPU（可行处） | **内存里 tiny Qwen2ForCausalLM（2 层）+ 真跑 llmcompressor oneshot** + 合成校准数据 | 用**真库跑真架构（只是小）**，库/框架级 bug 在 CPU 就被抓 —— 正中 C2，还不用 H200 | ✅ 默认 |
-| **L3 H200 smoke** | `test_*_h200.py` | H200，`@pytest.mark.h200` | 真 Qwen2.5-0.5B 再 7B 跑该 Step，断言跑通 + 输出合理 | 真实规模端到端验证 | ❌ 默认跳过（`-m "not h200"`） |
-
-- **L2 是 C2 的关键**：用 in-memory tiny 模型（`Qwen2Config(num_hidden_layers=2, hidden_size=64, ...)` 随机初始化，不下 7B）跑**真 llmcompressor 流水线**，所以库版本不兼容、API 误用、recipe 结构错等框架级问题在 CPU UT 阶段就暴露。
-- **FP8 等必须 FP8 硬件的逻辑**：CPU 跑不了 → 归到 L3（`@h200`），在 H200 上 smoke。
-- **专家开发每个 Step 时当场跑 L2/L3**：C2 的"开发期就验证跑通"由此保证，不攒到最后。
+- **L2 是 C2 的关键**：真 llmcompressor 流水线跑在 tiny 模型上，库版本不兼容 / API 误用 / recipe 结构错等框架级问题在 CPU 阶段就暴露。
+- **FP8 等必须 FP8 硬件的逻辑**：CPU 跑不了 → 归到 L3 cell，在 H200 上跑。
+- **开发专家写每个 Step 时当场执行 L1/L2/L3 cell**：C2 的"开发期就验证跑通"由此保证，不攒到最后。
 
 ## 6. 开发 Workflow（5 阶段，固化为可复用 Workflow，每模块跑一次）
 
@@ -86,8 +77,8 @@ quantization-tutorial/
 ① 开发专家开发 → ② 架构师审核 → ③ QA 评审 loop → ④ student 试课 loop → ⑤ 定稿
 ```
 
-- **① 一个开发专家开发整模块**：负责整模块全部 Step —— 写每个 Step 的 `.py`(logic+execution) + jupytext `.ipynb` + 三层 UT，**当场跑 L2/L3 验证跑通**，输出 `{文件 + smoke 结果 + 备注}`。
-- **② 架构师审核**：审一致性、Step 衔接、smoke 是否过、整体连贯；可要求返工。
+- **① 一个开发专家开发整模块**：负责整模块全部 Step —— 写每个 Step 的 `.ipynb`（讲解 + 代码 + ipytest 测试 cell + tiny 验证 cell + H200 执行 cell），**当场执行 L1/L2/L3 cell 验证跑通**，输出 `{notebook + 执行结果 + 备注}`。
+- **② 架构师审核**：审一致性、Step 衔接、notebook 执行是否过、整体连贯；可要求返工。
 - **③ QA 评审 loop**：质量保证评审员严格审（准确性 / 完备 / UT 覆盖 / 跑通证据 / 教学法）→ 架构师修 → 再审 → **循环到 verdict=pass**（封顶 3 轮，否则升级用户）。
 - **④ student 试课 loop**（见 §7）。
 - **⑤ 定稿**：merge、commit。
@@ -99,28 +90,30 @@ quantization-tutorial/
 student agent（学员）是"真实用户"代理，**两端评估**：
 
 - **隔离 worktree**：`git worktree add ../qt-student-mN`（独立分支）= 学员的课程副本，不扰主干。
-- **代码端**：`uv sync` 建环境 → 拉模型（或用缓存）→ 按序跑每个 Step → 跑 UT + smoke → 执行 notebook；记录跑通 / 报错 / 摩擦。
+- **代码端**：`uv sync` 建环境 → 拉模型（或用缓存）→ 按序执行每个 Step 的 notebook（ipytest 测试 cell + tiny 验证 cell + H200 执行 cell）；记录跑通 / 报错 / 摩擦。
 - **知识端**：通读全章，评**知识连贯性、讲解清晰度、逻辑跳跃、概念缺口、教学法** —— 凡觉得"课程设计不好"的地方都记下。
 - **反馈同时给架构师和评审员**：架构师改代码 / 结构，评审员评估并定夺教学法 / 连贯性问题。
 - 架构师 + 评审员修订 → student 重测 + 重评 → **循环到 student 觉得没问题**（代码跑通 AND 课程设计满意）；封顶防死循环，到顶升级用户。
 
-> 因开发期已跑 smoke + QA 已审，student 这轮主要抓可用性 / 清晰度（而非框架崩溃），收敛快；GPU 开销靠封顶轮数（如 3 轮）控制。
+> 因开发期已执行 notebook 验证（L1/L2/L3 cell）+ QA 已审，student 这轮主要抓可用性 / 清晰度（而非框架崩溃），收敛快；GPU 开销靠封顶轮数（如 3 轮）控制。
 
 ## 8. 开发顺序
 
-**实现顺序**：先搭系统骨架（`course/` 目录、`conftest.py`、`_tiny/`、顶层 `pyproject.toml` 测试配置、可复用开发 Workflow 脚本），再用 **M2 试水**跑通整条 workflow。
+**实现顺序**：先搭系统骨架（`course/` 目录结构、`envs/quant` 加 `ipytest`/`nbval`/`nbconvert`、可复用开发 Workflow 脚本），再用 **M2 试水**跑通整条 workflow。
 
 **M2 试水**（量化流水线 —— 最重、框架风险最高：env / 脚本 / 3 种量化 / compressed-tensors 全在 M2）：M2 跑通整条开发链 = 把"开发系统 + 测试骨架 + workflow"在最难模块上验证一遍；框架"跑不通"在 M2 就暴露、修好 harness，后面顺。
 
 然后 **M1（原理，代码最轻）→ M3（调优，吃 M2 的 SmoothQuant 产物）→ M4（部署，吃 M2/M3 产物）**。
 
-## 9. 测试 / CI 基础设施
+## 9. 测试 / 执行基础设施（notebook-only）
 
-- 顶层 `pyproject.toml` `[tool.pytest.ini_options]`：注册 marks `h200` / `slow` / `gpu`；默认 `-m "not h200 and not slow"`。
-- `course/conftest.py`：fixtures `tiny_model`（in-memory tiny Qwen2）/ `tiny_calib_data`（合成）/ `tmp_out_dir`。
-- **快 CI（无 H200）**：跑全部 L1 + L2 → 验证逻辑 + 库集成，秒级，抓绝大多数 bug。
-- **H200**：`pytest -m h200` 跑 L3（专家开发期 + student 试课）。
-- **notebook 执行测试**：`jupyter nbconvert --execute` / `pytest --nbval` 执行配对 notebook（重的标 `h200`）。
+- 测试 = notebook 内 ipytest cell；**headless 执行**：`uv run --directory envs/quant jupyter nbconvert --execute <notebook>`（整本跑通无错即过）或 `pytest --nbval`（cell 输出回归）。
+- **H200 cell GPU 守卫**：`if torch.cuda.is_available():` 包裹，无 H200 时自动跳过 → CPU 环境也能跑通整本（只跳过重 cell）。
+- **tiny 模型**：作为 setup cell 内联在每个 notebook（自包含，不依赖外部 fixture）。
+- **快验证（无 H200）**：执行 notebook，L1（ipytest）+ L2（tiny）cell 全过 = 逻辑 + 库集成 OK，秒级，抓绝大多数 bug。
+- **H200 验证**：执行 notebook 的 L3 cell（专家开发期 + student 试课）。
+- **清输出**：提交前 `nbconvert --clear-output`。
+- **依赖**：`envs/quant` 加 `ipytest`、`nbval`、`jupyter` / `nbconvert`。
 
 ## 10. 角色名册（开发 workflow）
 
@@ -136,16 +129,16 @@ student agent（学员）是"真实用户"代理，**两端评估**：
 ## 11. 单模块"完成"定义（Acceptance）
 
 一个模块判定完成，需同时满足：
-1. 全部 Step 有 `.py` + `.ipynb`（jupytext 配对）。
-2. L1 + L2 UT 全过（CPU）。
-3. L3 H200 smoke 全过（真 0.5B + 7B）。
+1. 全部 Step 有 `.ipynb`（含 ipytest 测试 cell + tiny 验证 cell + H200 执行 cell）。
+2. L1（ipytest）+ L2（tiny）cell 全过（CPU）。
+3. L3 H200 执行 cell 全过（真 0.5B + 7B）。
 4. QA 评审员 verdict = pass。
 5. Student 试课 = 满意（代码跑通 AND 课程设计满意），无未决反馈。
 6. 模块 merge + commit。
 
 ## 12. 范围外 / 开放问题
 
-- 本 spec 只定义**开发系统**；各模块的具体 Step 划分、UT 细节在实现计划（writing-plans）与开发期逐模块落地。
-- H200 smoke 的真实跑时成本（每模块每轮 review 的 GPU 时间）在 M2 试水时实测，据此定 student loop 封顶轮数（暂定 3）。
-- `lm_eval[vllm]` 与 vLLM wheel 的 transformers 共存（见 OUTLINE 附录 B）若冲突，UT/评测走 `local-completions` HTTP 兜底。
-- jupytext 是否纳入 `envs/quant` 依赖：是（`jupytext` + `nbval` 加入 quant pyproject）。
+- 本 spec 只定义**开发系统**；各模块的具体 Step 划分、cell 细节在实现计划（writing-plans）与开发期逐模块落地。
+- H200 执行 cell 的真实跑时成本（每模块每轮 review 的 GPU 时间）在 M2 试水时实测，据此定 student loop 封顶轮数（暂定 3）。
+- `lm_eval[vllm]` 与 vLLM wheel 的 transformers 共存（见 OUTLINE 附录 B）若冲突，评测走 `local-completions` HTTP 兜底。
+- 测试工具链纳入 `envs/quant`：`ipytest` + `nbval` + `jupyter` / `nbconvert`（已定：纳入）。
