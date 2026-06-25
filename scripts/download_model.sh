@@ -3,9 +3,9 @@
 # Download the baseline checkpoint (Qwen2.5-7B) to a shared path on an H200x8
 # single node, so every GPU / every env sees the same weights.
 #
-# Uses `huggingface-cli download` (from huggingface-hub). Verified CLI shape
+# Uses `hf download` (from huggingface-hub). Verified CLI shape
 # (2025-2026):
-#     huggingface-cli download <repo-id> --local-dir <dir>
+#     hf download <repo-id> --local-dir <dir>
 #   - Qwen2.5-7B base + Qwen2.5-7B-Instruct are NOT gated -> no token strictly
 #     required, but a token raises rate limits and is mandatory if you also pull
 #     gated repos. We read it from $HF_TOKEN (the documented variable).
@@ -41,19 +41,19 @@ else
 fi
 export HF_HUB_ENABLE_HF_TRANSFER=1   # fast path; harmless if hf-transfer missing
 
-# ---- which env provides huggingface-cli? -------------------------------------
+# ---- which env provides hf? -------------------------------------
 # Prefer the deploy env (it has huggingface-hub[hf-transfer] and is the lighter
 # one to stand up). Fall back to the quant env, then to system hf-cli.
 HF_CLI=""
 for cand in "$REPO_ROOT/envs/deploy/.venv" "$REPO_ROOT/envs/quant/.venv"; do
-  if [ -x "$cand/bin/huggingface-cli" ]; then HF_CLI="$cand/bin/huggingface-cli"; break; fi
+  if [ -x "$cand/bin/hf" ]; then HF_CLI="$cand/bin/hf"; break; fi
 done
 if [ -z "$HF_CLI" ]; then
-  if command -v huggingface-cli >/dev/null 2>&1; then
-    HF_CLI="$(command -v huggingface-cli)"
-    echo "[download_model] Using system huggingface-cli at $HF_CLI" >&2
+  if command -v hf >/dev/null 2>&1; then
+    HF_CLI="$(command -v hf)"
+    echo "[download_model] Using system hf at $HF_CLI" >&2
   else
-    echo "[download_model] huggingface-cli not found. Build an env first:" >&2
+    echo "[download_model] hf not found. Build an env first:" >&2
     echo "                   ./scripts/setup_env.sh   (then re-run this script)" >&2
     exit 1
   fi
