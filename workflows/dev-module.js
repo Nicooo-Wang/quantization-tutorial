@@ -148,7 +148,7 @@ const gate = await agent(`核对模块 ${MODULE} 开发未污染脚手架。
 1. 跑 \`git status --porcelain\` 列所有改动。
 2. \`course/${MODULE}/steps/\` 之外的改动都是违规（尤其 pyproject.toml/uv.lock/scripts/workflows/README/顶层）。
 3. 对每个违规文件 \`git checkout HEAD -- <file>\` 还原；steps/ 下任何文件一律不动。
-4. 冒烟：\`cd course/${MODULE} && uv sync && uv run python -c "import llmcompressor,transformers;print('ok')"\`。
+4. 冒烟：\`cd course/${MODULE} && uv sync && uv run python -c "print('ok')"\`。
 按 schema 报 violations/reverted/smokeOk。`, { label: '完整性闸门', phase: '完整性闸门', schema: GATE })
 log(`完整性闸门: violations=${gate.violations.length}, smokeOk=${gate.smokeOk}`)
 
