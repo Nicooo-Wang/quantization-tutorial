@@ -9,16 +9,18 @@
    bash scripts/setup_env.sh
    ```
    产出 `envs/quant/.venv`（量化用）与 `envs/deploy/.venv`（部署用）。本模块全程用 `envs/quant`。
-2. **拉基线模型**（H200×8 单节点下到共享路径，无需每卡各下一份）：
+2. **拉基线模型**（H200×8 单节点，8 卡共享同一文件系统，无需每卡各下一份）：
    ```bash
-   HF_TOKEN=xxxx bash scripts/download_model.sh /shared/models/Qwen2.5-7B-Instruct
+   HF_TOKEN=xxxx bash scripts/download_model.sh
+   # 默认下到 <repo>/models/Qwen2.5-7B-Instruct（脚本从 env 读 MODEL_REPO / MODEL_DIR，不接受位置参数；
+   #  想换路径：MODEL_DIR=/your/path HF_TOKEN=xxxx bash scripts/download_model.sh）
    ```
 3. **校准数据**（AWQ / SmoothQuant 需要；FP8 不需要）：
    在 quant env 里跑（每个需要校准的 notebook 首部都有这 cell）：
    ```python
    from datasets import load_dataset
    from transformers import AutoTokenizer
-   tok = AutoTokenizer.from_pretrained("/shared/models/Qwen2.5-7B-Instruct")
+   tok = AutoTokenizer.from_pretrained("models/Qwen2.5-7B-Instruct")  # 默认下载路径，repo 根相对（notebook 从 repo 根启动）
    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="train").shuffle(seed=42).select(range(512))
    calib = [tok(d["text"], return_tensors="pt").input_ids[0][:2048] for d in ds if d["text"].strip()]
    ```
