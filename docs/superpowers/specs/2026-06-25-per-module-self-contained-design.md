@@ -45,14 +45,15 @@ course/m2-quant-pipeline/
 ```
 
 删除：顶层 `envs/`（quant + deploy）、顶层 `scripts/`（setup_env.sh + download_model.sh）。
+保留：顶层 `models/`（已 gitignore，里面已下好 7B+0.5B）作为 `MODEL_CACHE` 的共享缓存源——M2 首次跑可 `MODEL_CACHE=<repo>/models` 复用，免重下。
 
 `.gitignore` 现有非锚定规则 `.venv/`、`models/`、`out/` 已自动覆盖模块内同名目录，无需改。
 
 ## 4. 组件设计
 
 ### 4.1 `pyproject.toml` 迁移
-- 把 `envs/quant/pyproject.toml` 内容移到 `course/m2-quant-pipeline/pyproject.toml`，依赖原样（torch cu128 / llmcompressor>=0.9 / compressed-tensors / transformers>=5.0 / ipytest / nbval / nbconvert / jupyter 等，均已验证可解析）。
-- `name` 改为模块相关（如 `m2-quant-pipeline`）；`requires-python>=3.10,<3.13` 保留；`[tool.uv]` cu128 index 配置保留（torch 必须走 cu128 匹配 12.8 驱动）。
+- 在 `course/m2-quant-pipeline/pyproject.toml` 写**M2 所需依赖子集**（自包含 = 每模块只装自己要的）：torch（cu128）/ `llmcompressor>=0.9` / `compressed-tensors` / `transformers>=5.0` / `accelerate` / `datasets` / `safetensors` / `sentencepiece` / `huggingface-hub[hf-transfer]` / `ipytest` / `nbval` / `nbconvert` / `jupyter`。**去掉 `lm-eval`**（那是 M3 评测用的，留给 M3 模块 env）。版本下界沿用已验证的 `envs/quant`。
+- `name = "m2-quant-pipeline"`；`requires-python>=3.10,<3.13` 保留；`[tool.uv]` cu128 index 配置保留（torch 必须走 cu128 匹配 12.8 驱动）。
 - 在模块目录内 `uv lock` 重生成 `uv.lock` 并 `uv sync` 建 `.venv`。
 - 冒烟：`uv run --directory course/m2-quant-pipeline python -c "import llmcompressor,transformers;print('ok')"`。
 
@@ -129,6 +130,8 @@ cd course/m2-quant-pipeline
 - **L3 无 GPU**：cell 仍 `if torch.cuda.is_available()` 守卫；无 GPU 记录 skip（H200 节点会真跑）。
 
 ## 7. 验收标准（"完成"的定义）
+
+**执行顺序**：先由计划执行者完成 §4.1–4.6 的重构 + §5 引用更新，满足验收 1–5；再跑 `dev-module.js`（`skipDev:true`）满足验收 6（双重验收）。
 
 1. `cd course/m2-quant-pipeline && uv sync` 成功；`import llmcompressor,transformers` 冒烟过。
 2. `bash scripts/download_model.sh`（MODEL_CACHE 复用）跑通，`./models/` 有 7B+0.5B 的 `config.json`；0.5B 真实下载路径也验过。
