@@ -4,13 +4,21 @@
 
 1. **标题 markdown cell**：`# Step N: <名称>` + 一句话目标 + 对应 OUTLINE 课时。
 2. **导入 cell**：`import`（含 `%%capture` 抑制冗余输出）。
-   - **cwd 无关路径解析**：notebooks 通过 `uv run --directory envs/quant jupyter lab` 启动，但 `jupyter lab` 的 cwd 是*所在 shell 的* cwd（**不是** `--directory` 的目标），所以 `models/Qwen2.5-7B-Instruct` 这类仓库根相对路径只有在学员碰巧 `cd` 到仓库根时才工作。notebooks 必须自行解析仓库根，不依赖 cwd：
+   - **cwd 无关路径解析**：notebook 通过 `cd course/<module> && uv run jupyter lab` 启动，但 jupyter 的 cwd 是*所在 shell 的* cwd，所以路径绝不依赖裸相对路径。notebook 自己**向上发现模块根**（含 `steps/` + `pyproject.toml` 的目录），从模块根派生 `models/`、`out/`：
      ```python
-     import subprocess, pathlib
-     REPO_ROOT = pathlib.Path(subprocess.check_output(["git","rev-parse","--show-toplevel"], text=True).strip())
-     MODEL_DIR = REPO_ROOT / "models" / "Qwen2.5-7B-Instruct"   # 与 download_model.sh 默认 MODEL_DIR 一致
+     import pathlib
+     def _find_module_root(start):
+         p = pathlib.Path(start).resolve()
+         for cand in [p, *p.parents]:
+             if (cand / "steps").is_dir() and (cand / "pyproject.toml").exists():
+                 return cand
+         raise RuntimeError("在模块目录内启动 jupyter")
+     MODULE_ROOT   = _find_module_root(pathlib.Path.cwd())
+     MODEL_DIR     = MODULE_ROOT / "models" / "Qwen2.5-7B-Instruct"    # 与 scripts/download_model.sh 一致
+     TINY_MODEL_DIR = MODULE_ROOT / "models" / "Qwen2.5-0.5B-Instruct"  # L2/L3 先在 0.5B 上验，再上 7B
+     OUT_ROOT      = MODULE_ROOT / "out"                               # 已 gitignore
      ```
-     notebook 中所有文件路径都从 `REPO_ROOT`（或 `MODEL_DIR`）派生，绝不使用裸相对路径。
+     notebook 中所有文件路径都从 `MODULE_ROOT`（或 `MODEL_DIR`/`OUT_ROOT`）派生，绝不使用裸相对路径或 `git rev-parse` 仓库根。
 3. **讲解 markdown cells**：原理 / 公式 / 这步做什么（分几段）。
 4. **填空代码 cells**：每个 `logic` 函数一个 cell，形如：
    ```python
@@ -40,7 +48,7 @@
    ```python
    import torch
    if torch.cuda.is_available():
-       run_fp8_quantize(MODEL_DIR, REPO_ROOT / "out" / "qwen-fp8")   # MODEL_DIR / REPO_ROOT 见 cell 2；out/ 已 gitignore
+       run_fp8_quantize(MODEL_DIR, OUT_ROOT / "qwen-fp8")   # MODEL_DIR / OUT_ROOT 见 cell 2；先在 TINY_MODEL_DIR 验，再上 7B
    else:
        print("跳过：无 GPU（CPU 环境只跑 L1/L2）")
    ```

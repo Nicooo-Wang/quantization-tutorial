@@ -4,7 +4,7 @@
 >
 > **课程主线**：`M2 量化 → M3 精度调优(layer fallback) → M3 评测 → M4 vLLM 声明式部署`，三种方法（SmoothQuant / AWQ / FP8）贯穿，端到端闭环以 SmoothQuant 为范例走通。
 >
-> **本轮修订关键升级**：Python 环境全面迁移到 **uv** 管理（量化 env A 与部署 env B 各一套独立 uv 项目）；M4 明确声明式部署、无需改模型代码；M4.6 去冗余收敛。
+> **本轮修订关键升级**：Python 环境全面迁移到 **uv** 管理（**每模块一个独立 uv 项目目录** `course/<module>/`）；M4 明确声明式部署、无需改模型代码；M4.6 去冗余收敛。
 
 ---
 
@@ -45,40 +45,40 @@
 | llm-compressor (`llmcompressor`) | **0.12.x** | `>=0.7` 支持 mixed-precision config_groups；`>=0.9` 覆盖现代 `QuantizationModifier` API；**0.12.x 要求 transformers v5**。常需配合当前 vLLM stable |
 | compressed-tensors | **0.17.x** | llm-compressor 三方法（FP8/AWQ/SmoothQuant）的统一产物格式；vLLM `auto` 识别的依据。`pyproject.toml` 下限 `>=0.10` |
 | AutoAWQ | **已废弃** | vLLM 官方已废弃 AutoAWQ，AWQ 能力收编进 llm-compressor（输出 compressed-tensors）。仅作遗留路径对照，不作为主路径 |
-| lm-eval (`lm_eval`) | **0.4.12** | 核心包**不再内置 model backend** —— 评测 vLLM 必须额外 `uv pip install --python envs/quant/.venv/bin/python 'lm_eval[vllm]'`，否则 `--model vllm` / `local-completions` 后端不可用。中文任务 `ceval-valid`/`cmmlu` 以 `lm_eval --tasks list` 实测为准 |
+| lm-eval (`lm_eval`) | **0.4.12** | 核心包**不再内置 model backend** —— 评测 vLLM 必须额外 `cd course/<module> && uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'`，否则 `--model vllm` / `local-completions` 后端不可用。中文任务 `ceval-valid`/`cmmlu` 以 `lm_eval --tasks list` 实测为准 |
 | transformers | **5.12.x** | vLLM wheel 自带匹配 transformers，不要另装冲突版本；llmcompressor 0.12 要求 v5 |
 | accelerate | **1.14.x** | oneshot 期间 `device_map` / 多卡加载需要 |
 | huggingface-hub | **1.20.x** | 用 `huggingface-hub[hf-transfer]` extra 拉 `hf_transfer` 加速；纯 `huggingface-hub` 不含 hf-transfer |
-| uv | **0.8.x** | Python 环境与依赖管理器，替代 pip。课程用 `uv venv` + `uv lock` + `uv sync` 管理两个隔离 env（`envs/quant`、`envs/deploy`） |
-| Python | **3.11**（两个 env 统一基线） | llm-compressor 要求 `>=3.10`；课程锁定 3.11，两个 env 必须用同一 Python 次版本，否则 vLLM/torch ABI 可能不一致影响产物一致性 |
+| uv | **0.8.x** | Python 环境与依赖管理器，替代 pip。课程**每模块一个独立 uv 项目目录**（`course/<module>/`，各自 `pyproject.toml` + `uv.lock` + `.venv`），用 `cd course/<module> && uv sync` 复现 |
+| Python | **3.11**（所有模块统一基线） | llm-compressor 要求 `>=3.10`；课程锁定 3.11，各模块必须用同一 Python 次版本，否则 vLLM/torch ABI 可能不一致影响产物一致性 |
 
-> **工程建议**：量化环境与部署环境**分开两个 uv 项目**（量化用 env A 跑 llm-compressor `oneshot`，部署用 env B 跑 vLLM serve），避免 transformers 版本被互相锁定。开课前 `uv sync` + `commit` 两份 `uv.lock` 固定一套验证过的版本组合。
+> **工程建议**：每节课 = 一个独立 uv 项目目录 `course/<module>/`（量化模块用 llmcompressor env，部署模块 M3/M4 各自模块内建 vLLM env），用模块内的 `uv.lock` 固定一套验证过的版本组合。开课前在各模块目录 `uv sync` + commit `uv.lock`。
 
-## uv 双 env 工作流（路径 A：两个独立 uv 项目目录）
+## uv 工作流（每模块自包含 uv 项目）
 
-采用**路径 A：两个独立 uv 项目目录**实现量化 env A 与部署 env B 的隔离。结构：`envs/quant/`（含 `pyproject.toml` + `uv.lock` + `.venv`）与 `envs/deploy/`（含 `pyproject.toml` + `uv.lock` + `.venv`），各自独立。
+采用**每模块自包含 uv 项目**：`course/<module>/pyproject.toml` + `uv.lock` + `.venv` + `scripts/` + `models/` + `README`，顶层不再有 `envs/`/`scripts/`。M2/M1 用 quant env（llmcompressor），M3/M4 各自模块内建 vLLM env。
 
-**理由**：vLLM wheel 自带并锁定 transformers/torch，而 llmcompressor/lm-eval 需要不同的 transformers —— 放一个 env 会让 uv/pip 互相争抢版本，分离后各自 `uv.lock` 自然隔离。
+**理由**：vLLM wheel 自带并锁定 transformers/torch，而 llmcompressor/lm-eval 需要不同的 transformers —— 把它们放一个 env 会让 uv/pip 互相争抢版本；按模块拆成独立 uv 项目后，各自 `uv.lock` 自然隔离，且学员在一个模块内即可闭环（env + 脚本 + 模型 + notebook），不必跨目录。
 
-**工作流三件套职责**：
-- `uv venv --python 3.11`：创建该项目目录下的空 `.venv`（仅 seed 包），不装业务依赖。
-- `uv lock --directory envs/<env>`：根据该目录 `pyproject.toml` 生成/更新 `uv.lock`（锁定精确依赖图）。
-- `uv sync --directory envs/<env>`：按 `uv.lock` 把依赖装入该目录 `.venv`。`--directory` 让 uv 把该目录当项目根，`pyproject.toml`/`uv.lock`/`.venv` 都落在该目录下。
+**工作流三件套职责**（均在模块目录内执行）：
+- `cd course/<module>`：进入对应模块目录（每个模块就是一个 uv 项目根）。
+- `uv sync`：读该目录 `pyproject.toml` + `uv.lock`，把依赖装入该目录 `.venv`。
+- `uv run <cmd>`：在模块 `.venv` 内执行（如 `uv run jupyter lab`、`uv run python recipes/xxx.py`）；env 已 sync 时是 no-op。
 
-**复现性**：来自 `uv.lock`（跨平台精确版本图），不是 `pyproject.toml`。两个 `uv.lock` 都要 commit；新 H200 节点 `uv sync --directory envs/<env>` 即可复现。运行命令：`uv run --directory envs/quant python recipes/xxx.py`（`uv run` 会先做一次 sync 检查，env 已 sync 时是 no-op）；激活方式 `source envs/quant/.venv/bin/activate`。
+**复现性**：来自模块目录内的 `uv.lock`（跨平台精确版本图），不是 `pyproject.toml`。每个模块的 `uv.lock` 都要 commit；新 H200 节点 `cd course/<module> && uv sync` 即可复现。激活方式 `source course/<module>/.venv/bin/activate`。
 
 **关键坑（必须避免）**：
 
-1. 不要写 `uv venv envs/quant && uv sync` 就期望 sync 装进 `envs/quant` —— `uv sync` 默认认项目根 `.venv`，会再建 `.venv` 或报冲突。必须在对应 env 目录内执行（cd 到该目录），或在根用 `--directory` flag。
-2. 仓库根若无 `pyproject.toml`，根目录跑 `uv sync` 会报 `no project` —— 必须 `--directory` 指定项目目录。
-3. 不要另装 torch：vLLM wheel 自带 CUDA 12.8 配对的 torch，单独装 torch 会覆盖该 build，破坏 FP8/INT8 kernel。
-4. 环境检查不要用 `uv run`（每次会触发 sync 检查，vLLM env 可能触发数分钟重装）—— `setup_env.sh` 用 `.venv/bin/python` 直接调。
-5. **lm-eval 核心包不含 model backend，quant env 需额外装 `lm_eval[vllm]` extra。但真正风险是 `uv pip` 只认"激活的 env / `--python <path>`"，**不认项目 venv** —— 直接 `uv pip --directory envs/quant install 'lm_eval[vllm]'` 不会装进 `envs/quant/.venv`（`--directory` 对 `uv pip` 只改 cwd、不绑定目标解释器，会装错环境或找不到解释器）。**正确写法是显式传 `--python` 指向目标 venv 的 python**：
+1. 不要在仓库根跑 `uv sync` —— 根目录无 `pyproject.toml`（顶层不再有 envs/scripts），会报 `no project`。必须先 `cd course/<module>` 进入模块目录。
+2. 不要另装 torch：vLLM wheel 自带 CUDA 12.8 配对的 torch，单独装 torch 会覆盖该 build，破坏 FP8/INT8 kernel。
+3. 环境检查不要用 `uv run`（每次会触发 sync 检查，vLLM env 可能触发数分钟重装）—— 用 `.venv/bin/python` 直接调。
+4. **lm-eval 核心包不含 model backend，quant 模块需额外装 `lm_eval[vllm]` extra。但真正风险是 `uv pip` 只认"激活的 env / `--python <path>`"，**不认项目 venv** —— 直接 `uv pip install 'lm_eval[vllm]'` 在未激活时不知道装哪。**正确写法是显式传 `--python` 指向目标 venv 的 python**：
    ```bash
-   uv pip install --python envs/quant/.venv/bin/python 'lm_eval[vllm]'
+   cd course/<module>
+   uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'
    ```
 
-**教学锚点**：`envs/quant/pyproject.toml` 与 `envs/deploy/pyproject.toml` 是两个 env 的唯一事实来源；`setup_env.sh` 是一键复现入口。不采用单 `pyproject.toml` 多 venv（需 `UV_PROJECT_ENVIRONMENT` 环境变量，语义不清晰）。如未来改用 uv workspace（`[tool.uv.workspace] members=envs/*`）可共享根 `uv.lock` 同时各自独立 venv，是更集中的演进方向，本轮先用路径 A 保证清晰。
+**教学锚点**：每个模块的 `pyproject.toml` 是该模块 env 的唯一事实来源；`scripts/download_model.sh` 是一键拉模型入口（下到模块 `./models/`）。不采用单根 `pyproject.toml` 多 venv（需 `UV_PROJECT_ENVIRONMENT` 环境变量，语义不清晰）。如未来改用 uv workspace（`[tool.uv.workspace] members=course/*`）可共享根 `uv.lock` 同时各自独立 venv，是更集中的演进方向，本轮先用每模块自包含保证清晰。
 
 ---
 
@@ -133,23 +133,23 @@
 
 ### 模块 2：H200×8 环境与端到端量化流水线（动手）
 
-**模块目标**：用 uv 管理搭好 H200×8 可复现的双隔离环境（量化 env A / 部署 env B），用 **llm-compressor 统一工具链**产出三种可部署量化模型（FP8 / AWQ / SmoothQuant），讲清方法间的工程差异。这是闭环的起点。
+**模块目标**：用 uv 管理搭好 H200×8 可复现的模块自包含环境（M2/M1 用 quant env、M3/M4 各自模块内建 vLLM env），用 **llm-compressor 统一工具链**产出三种可部署量化模型（FP8 / AWQ / SmoothQuant），讲清方法间的工程差异。这是闭环的起点。
 
 **课时安排**：
 
-#### 2.1 环境搭建：uv 工作流 + 两个隔离 env（~50 分钟）
+#### 2.1 环境搭建：每模块自包含 uv 工作流（~50 分钟）
 - 📌 **为什么用 uv 而非 pip**：vLLM wheel 自带并锁定 transformers/torch，而 llmcompressor/lm-eval 需不同 transformers —— 一个 env 会让版本互锁；uv 用各自 `pyproject.toml` + `uv.lock` 自然隔离，且 `uv.lock` 是跨平台精确锁（`pip freeze` 只是扁平列表、传递依赖会漂移）
-- 📌 **路径 A**：两个独立 uv 项目目录（`envs/quant`、`envs/deploy`），各自 `pyproject.toml` + `uv.lock` + `.venv`；`uv venv --python 3.11` 建空 venv，`uv lock --directory` 生成锁，`uv sync --directory` 装锁定版本
-- 📌 uv 三件套职责：`uv venv` 建 blank venv（仅 seed）、`uv sync` 读 `pyproject`+`uv.lock` 装依赖、`uv.lock` 跨平台锁精确版本图（复现性来源，两个 `uv.lock` 都 commit）
-- 📌 `--directory` flag 让一个 repo 跑两个项目：`uv sync --directory envs/quant` / `envs/deploy`
-- 📌 不要另装 torch（vLLM wheel 自带 CUDA 12.8 配对 torch）；lm-eval 核心包不含 model backend，需额外 `uv pip install --python envs/quant/.venv/bin/python 'lm_eval[vllm]'`
-- ⚠️ 关键坑：`uv pip` **只认激活的 env / `--python <path>`，不认项目 venv**。给 quant env 装 `lm_eval[vllm]` extra 不能用 `uv pip --directory envs/quant install ...`（`--directory` 对 `uv pip` 只改 cwd，会装错环境），必须显式 `--python envs/quant/.venv/bin/python`
-- 🛠 动手：跑 `scripts/setup_env.sh` 一键建两个 env；`envs/quant/pyproject.toml` 与 `envs/deploy/pyproject.toml` 是两 env 唯一事实来源；输出 `nvidia-smi` / `nvcc` / 各库版本核对（vllm 0.23.x、llmcompressor 0.12.x、compressed-tensors 0.17.x、torch CUDA 12.8）
+- 📌 **每模块自包含 uv 项目**：`course/<module>/pyproject.toml` + `uv.lock` + `.venv` + `scripts/` + `models/` + `README`，顶层不再有 `envs/`/`scripts/`；M2/M1 用 quant env（llmcompressor），M3/M4 各自模块内建 vLLM env
+- 📌 uv 三件套职责：`cd course/<module>` 进入项目目录、`uv sync` 读 `pyproject`+`uv.lock` 装依赖到模块 `.venv`、`uv.lock` 跨平台锁精确版本图（复现性来源，每个模块 `uv.lock` 都 commit）
+- 📌 模块内一键建 env：`cd course/m2-quant-pipeline && uv sync`；模块 `pyproject.toml` 是该 env 唯一事实来源
+- 📌 不要另装 torch（vLLM wheel 自带 CUDA 12.8 配对 torch）；lm-eval 核心包不含 model backend，需额外 `cd course/<module> && uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'`
+- ⚠️ 关键坑：`uv pip` **只认激活的 env / `--python <path>`，不认项目 venv**。给 quant 模块装 `lm_eval[vllm]` extra 必须先 `cd course/<module>` 再显式 `--python ./.venv/bin/python`（未激活时直接 `uv pip install` 不知道装哪）
+- 🛠 动手：在模块目录内 `cd course/m2-quant-pipeline && uv sync` 建 env；`course/m2-quant-pipeline/pyproject.toml` 是 env 唯一事实来源；输出 `nvidia-smi` / `nvcc` / 各库版本核对（vllm 0.23.x、llmcompressor 0.12.x、compressed-tensors 0.17.x、torch CUDA 12.8）
 
 #### 2.2 统一基线 Qwen2.5-7B-Instruct + 中英文校准/评测集（~40 分钟）
 - 📌 基线模型：全课统一 **Qwen2.5-7B-Instruct**（与 `download_model.sh` 默认 `MODEL_REPO=Qwen/Qwen2.5-7B-Instruct` 对齐，保证四维对比可比性；课程选 Instruct 因为也要做指令遵循/工具调用评测）
 - 📌 ⚠️ **base vs Instruct 差异**：base 模型未做指令微调，在 GSM8K 5-shot / MMLU 5-shot 等指令遵循任务上分数显著低于 Instruct；课程统一用 Instruct 以保证评测可比。如需对照 base，`MODEL_REPO=Qwen/Qwen2.5-7B` 覆盖
-- 📌 用 `scripts/download_model.sh` 把模型下到 H200×8 共享路径（所有卡可见，避免每卡重复下）；`huggingface-cli download <repo-id> --local-dir <dir>`
+- 📌 在模块目录内用 `scripts/download_model.sh` 把模型下到模块 `./models/`（本模块自包含；可在别处下过后用 `MODEL_CACHE=<repo>/models bash scripts/download_model.sh` 复用免重下）；`huggingface-cli download <repo-id> --local-dir <dir>`
 - 📌 HF_TOKEN 说明：Qwen2.5-7B-Instruct 非 gated，匿名可下，但设 `HF_TOKEN` 避免匿名限流（脚本自动认 `HF_TOKEN`，无需 `--token` 明文）；`HF_HUB_ENABLE_HF_TRANSFER=1` 加速但必须先装 `hf_transfer` 包（否则报下载失败/被误诊为 unrecognized model，transformers issue #37477）
 - 📌 下载后校验 `config.json` `architectures=Qwen2ForCausalLM`，确认声明式部署前提（无需 `trust_remote_code`）
 - 📌 校准集：`wikitext2-raw-v1` train split，`shuffle(seed=42).select(range(512))`，每条 2048 tokens（INT8 W8A8 至少 512 样本；FP8 无需校准；AWQ 极省样本 128–256 即可）
@@ -207,7 +207,7 @@
 - 📌 `save_pretrained` 会把 tokenizer（含 chat template）与 `generation_config` 一并保存到产物目录，部署侧原样读取，无需写模板代码
 - 🛠 动手：产出三个可部署量化模型（`Qwen2.5-7B-FP8` / `-AWQ-W4A16` / `-SmoothQuant-W8A8`），打印各自 `config.json` `quantization_config` 与显存占用对比
 
-**🔧 模块动手实验**：「环境体检 + 三方法量化初体验」——跑 `scripts/setup_env.sh` 建 quant/deploy 两 env，跑 `scripts/download_model.sh` 下模型，对 Qwen2.5-7B-Instruct 分别产出 FP8 / AWQ / SmoothQuant 三个量化模型，提交显存对比表（FP16 / FP8 / W4A16 / W8A8）与环境检查 cell 输出。
+**🔧 模块动手实验**：「环境体检 + 三方法量化初体验」——在模块目录内 `cd course/m2-quant-pipeline && uv sync` 建 env，跑 `bash scripts/download_model.sh` 下模型，对 Qwen2.5-7B-Instruct 分别产出 FP8 / AWQ / SmoothQuant 三个量化模型，提交显存对比表（FP16 / FP8 / W4A16 / W8A8）与环境检查 cell 输出。
 
 ---
 
@@ -329,8 +329,8 @@
   | TP 启动 hang / rank timeout | NCCL 不匹配 / P2P | `pip show nvidia-nccl-cu12`；`--disable-custom-all-reduce`；`NCCL_DEBUG=INFO` |
   | `CUDA error: no kernel image` | wheel CUDA 基线(12.8) ≠ 实际 CUDA | 用 CUDA 12.8 镜像或源码 build |
   | OOM at profile run | `--gpu-memory-utilization` 太高 / KV 太大 | 降到 0.85 或降 `--max-model-len`（量化模型 OOM 多为 KV） |
-  | `ValueError: task 'ceval-valid' not found` | lm-eval 版本太旧 / `lm_eval[vllm]` extra 未装 | `uv pip install --python envs/quant/.venv/bin/python -U 'lm_eval[vllm]'`，`lm_eval --tasks list` 核对 |
-  | llm-compressor `oneshot` 报 transformers 版本不符 | transformers 被 vLLM 锁版本 | 量化 env 与部署 env 分开（本课已用 uv 双 env 解决） |
+  | `ValueError: task 'ceval-valid' not found` | lm-eval 版本太旧 / `lm_eval[vllm]` extra 未装 | `cd course/<module> && uv pip install --python ./.venv/bin/python -U 'lm_eval[vllm]'`，`lm_eval --tasks list` 核对 |
+  | llm-compressor `oneshot` 报 transformers 版本不符 | transformers 被 vLLM 锁版本 | 量化与部署分模块（本课已用每模块自包含 uv 项目隔离） |
 
 #### 4.5 发布量化模型到 HuggingFace Hub（~35 分钟）
 - 📌 用 `huggingface_hub` 的 `upload_folder`（比 git push 大文件更稳、可断点续传）：
@@ -348,7 +348,7 @@
 - 📌 **本节不重新教部署/压测**——部署与压测步骤引用 4.1（加载 flag/kernel 速查）–4.2（TP=8 多卡）–4.3（`vllm bench serve` / metrics）；不再重复列 `vllm serve` 命令、不再重教 `--tensor-parallel-size`、不再重教 bench 命令
 - 📌 **聚焦①整条链路串接**：量化产物（`config.json` `quantization_config` + 量化权重）→ 调优（`ignore`/mixed-precision 回退后的最终产物）→ 评测（四维 Pareto 精度数）→ 部署（引用 4.1-4.2 的 serve 命令）→ 压测（引用 4.3 的 `vllm bench serve` / metrics）；强调链路唯一交接物是 compressed-tensors 产物目录
 - 📌 **聚焦②选型决策树**：把 M1.6 三范式选型（W4A16 访存墙/W8A8 计算墙/FP8）与 M3.8 四维 Pareto 数据结合，产出按 H200×8 + 目标吞吐/显存/精度约束选哪条路径的决策树
-- 📌 **聚焦③可复现交付物四件套**：量化 recipe（`.py`/yaml）+ `uv.lock`（两 env 各一）+ 产物 HF Hub 路径 + serve 命令 + 压测报告，打包成可复现交付物（固定 seed/prompt/batch 的 notebook + README + 选型决策树一页纸）
+- 📌 **聚焦③可复现交付物四件套**：量化 recipe（`.py`/yaml）+ 各模块 `uv.lock` + 产物 HF Hub 路径 + serve 命令 + 压测报告，打包成可复现交付物（固定 seed/prompt/batch 的 notebook + README + 选型决策树一页纸）
 - 📌 评分维度：可复现性（固定 seed/prompt/batch）、指标完整性（四维）、调优是否找到 Pareto 拐点、选型建议是否场景化
 
 #### 4.7 前瞻：QAT 概念 + NVFP4（~25 分钟）
@@ -361,14 +361,14 @@
 
 ## 评估与练习（分层）
 
-1. **跑通层**：在 Qwen2.5-7B-Instruct 上用 llm-compressor 产出 FP8 模型并用 vLLM `--tensor-parallel-size 8` 加载 generate，提交显存对比 + 环境检查 cell（用 `uv run --directory envs/deploy` 跑）。
+1. **跑通层**：在 Qwen2.5-7B-Instruct 上用 llm-compressor 产出 FP8 模型并用 vLLM `--tensor-parallel-size 8` 加载 generate，提交显存对比 + 环境检查 cell（在部署模块目录内 `cd course/m4-deploy-loop && uv run` 跑）。
 2. **对比层**：对同一 Qwen2.5-7B-Instruct 分别产出 SmoothQuant/AWQ/FP8 三模型（固定校准集与 seed），提交「方法 | 比特 | group_size | PPL | 显存 | tokens/s」对比表，解释差异。
 3. **调优层**：对 SmoothQuant 模型做逐层敏感度分析 + mixed-precision 回退，提交 PPL 恢复曲线与 Pareto 拐点结论。
 4. **闭环交付（Mini 项目）**：M4.6 的完整闭环交付（选型决策树 + 可复现交付物四件套）。
 5. **反例诊断题**：给一份 PPL 异常的量化结果（量化了 lm_head？随机噪声校准？对称 INT4 激活？add_bos_token 漏加？），诊断原因并给修复方案。
 6. **测量规范题**：给一段有 bug 的压测脚本（缺 warmup / 把首 token 延迟当吞吐 / 没区分权重与 KV-Cache 显存 / 用 `llm.generate()` 测 TTFT），找出并修复所有测量错误。
 7. **格式-kernel 配套题**：判断下列组合是否可行并说明 kernel 路径——(a) 遗留 AutoAWQ 模型 `--quantization awq`；(b) AutoAWQ 量化 `zero_point=True` 后走 Marlin；(c) compressed-tensors SmoothQuant 模型不传 `--quantization` flag。
-8. **uv 工作流题**：给一份错误的两 env 搭建命令（`uv venv envs/quant && uv sync` 在根执行；以及误用 `uv pip --directory envs/quant install 'lm_eval[vllm]'`），指出为什么失败（前者 `uv sync` 认根 `.venv`；后者 `--directory` 对 `uv pip` 只改 cwd、不绑定项目 venv）并改写为正确的 `--directory`/`--python envs/quant/.venv/bin/python` 写法；说明 `uv.lock` 与 `pyproject.toml` 在复现性上的职责区别。
+8. **uv 工作流题**：给一份错误的模块 env 搭建命令（在仓库根直接 `uv sync` 报 `no project`；以及未 `cd` 进模块目录就 `uv pip install 'lm_eval[vllm]'` 不知道装哪），指出为什么失败（根目录无 `pyproject.toml`；`uv pip` 未激活时只认 `--python <path>`、不认项目 venv）并改写为正确的 `cd course/<module> && uv sync` / `cd course/<module> && uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'` 写法；说明 `uv.lock` 与 `pyproject.toml` 在复现性上的职责区别。
 9. **声明式部署题**：给定一段 vLLM serve 命令（误加 `--trust-remote-code` / `--chat-template` / `--quantization fp8`），判断哪些 flag 对 Qwen2.5-7B compressed-tensors 模型是多余的或错误的，并说明自动加载机制（`quantization_config` / `chat_template` / `generation_config`）。
 10. **选型论述题**：给定「H200×8 + 32k 上下文 + 可接受 PPL 升幅<3%」场景，论述应选 SmoothQuant/AWQ/FP8 中哪种，并用本课数据支撑（须同时考虑 KV-Cache 显存与长上下文质量劣化）。
 
@@ -419,16 +419,15 @@ model.save_quantized(quant_path, safetensors=True, shard_size="4GB")
 ```
 
 ```bash
-# === uv 双 env 工作流（替代 pip）===
-uv venv --python 3.11 envs/quant/.venv          # 建空 venv
-uv lock --directory envs/quant                   # 生成 uv.lock
-uv sync --directory envs/quant                   # 按 uv.lock 装依赖
+# === uv 每模块自包含工作流（替代 pip）===
+cd course/m2-quant-pipeline                       # 进入模块目录（每个模块就是一个 uv 项目）
+uv sync                                           # 读 pyproject.toml + uv.lock，装依赖到模块 ./.venv
 # lm-eval 核心不含 model backend —— 注意：uv pip 只认激活 env / --python，不认项目 venv！
-# 必须显式 --python 指向目标 venv，不能用 --directory（只改 cwd）。
-uv pip install --python envs/quant/.venv/bin/python 'lm_eval[vllm]'
-# deploy env 同理（uv sync --directory envs/deploy）
-# 运行：uv run --directory envs/quant python recipes/xxx.py
-# 复现：commit 两个 uv.lock，新节点 uv sync --directory 即可
+# 未激活时必须显式 --python 指向目标 venv，否则不知道装哪。
+uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'
+# M3/M4 部署模块同理（cd course/<module> && uv sync）
+# 运行：cd course/<module> && uv run jupyter lab  （或 uv run python recipes/xxx.py）
+# 复现：commit 各模块 uv.lock，新节点 cd course/<module> && uv sync 即可
 
 # === vLLM H200×8 声明式部署（Qwen2.5-7B 无需 --trust-remote-code）===
 vllm serve <model> --tensor-parallel-size 8 --gpu-memory-utilization 0.90 \
@@ -450,9 +449,9 @@ curl -s http://localhost:8000/metrics | grep -E 'gpu_cache_usage_perc|num_gpu_bl
 
 ## 附录 B：需在开课前实测确认的点（专家标注的 open questions）
 
-1. **uv 结构选型**：两个 env 用两个完全独立项目（各自 `uv.lock`，本课方案）还是 workspace（共享根 `uv.lock`，`[tool.uv.workspace] members=envs/*`）？workspace 复现性更集中，但 GitHub Issue #8722 指出 workspace member 的 per-member dependency-groups 同步仍有局限。需课程方定夺结构偏好（本轮先用路径 A）。
-2. **deploy env 的 vLLM 版本锁定**：是否需要锁到具体 PyPI 版本（0.23.x 还是更早）？不同小版本对 compressed-tensors scheme 的 kernel 支持有差异（如 0.10.1+ 才原生跑 mixed-precision config_groups），锁定哪个版本影响 `setup_env.sh` 的 `uv.lock` 内容。
-3. **完整 uv sync 实测**：实际 `uv sync` 两个 env（含 vLLM CUDA12.8 wheel + llmcompressor 全量传递依赖）在目标 H200 节点的总安装时长与磁盘占用未实测——本轮只验证了 `pyproject.toml` 语法层在 uv 0.8.x 解析通过，**完整 sync + `lm_eval[vllm]` 装入目标 venv 待目标 H200 节点实测**（vLLM wheel 很大）。
+1. **uv 结构选型**：每模块用完全独立 uv 项目（各自 `uv.lock`，本课方案）还是 workspace（共享根 `uv.lock`，`[tool.uv.workspace] members=course/*`）？workspace 复现性更集中，但 GitHub Issue #8722 指出 workspace member 的 per-member dependency-groups 同步仍有局限。需课程方定夺结构偏好（本轮先用每模块自包含）。
+2. **deploy 模块的 vLLM 版本锁定**：是否需要锁到具体 PyPI 版本（0.23.x 还是更早）？不同小版本对 compressed-tensors scheme 的 kernel 支持有差异（如 0.10.1+ 才原生跑 mixed-precision config_groups），锁定哪个版本影响各部署模块 `uv.lock` 内容。
+3. **完整 uv sync 实测**：实际 `cd course/<module> && uv sync`（含 vLLM CUDA12.8 wheel + llmcompressor 全量传递依赖）在各模块目录的总安装时长与磁盘占用未实测——本轮只验证了 `pyproject.toml` 语法层在 uv 0.8.x 解析通过，**完整 sync + `lm_eval[vllm]` 装入目标 venv 待目标 H200 节点实测**（vLLM wheel 很大）。
 4. **`lm_eval[vllm]` extra 与 vllm wheel transformers 冲突**：extra 装入 quant env 后是否会与 vllm wheel 自带 transformers 冲突——需目标节点 `uv sync` 后实测 `lm_eval --model vllm` 能否正常起。
 5. **`uv pip install --python ... 'lm_eval[vllm]'` 与后续 `uv sync` 的一致性**：这种方式装的 extra 是否会被后续 `uv sync` 视为环境偏离 `uv.lock` 而触发重装/卸载 extra，需实测确认 uv 对 `uv pip install` 与 `uv sync` 的一致性处理。
 6. **hf-transfer 容器兼容**：`download_model.sh` 的 hf-transfer 在 H200 节点（可能是容器内）是否生效——容器环境偶有 hf-transfer 与 glibc 兼容问题，需实测下载一次大文件确认加速生效。
@@ -473,8 +472,8 @@ curl -s http://localhost:8000/metrics | grep -E 'gpu_cache_usage_perc|num_gpu_bl
 
 **【必须改动，已落实】**：
 
-- **C1（CRITICAL）uv pip 环境 bug**：所有 `uv pip --directory envs/quant install 'lm_eval[vllm]'` 一律改为 `uv pip install --python envs/quant/.venv/bin/python 'lm_eval[vllm]'`。`--directory` 对 `uv pip` 只改 cwd、不绑定目标解释器，会装错环境（实测 `uv pip` 只认激活 env / `--python <path>`，不认项目 venv）。涉及 `scripts/setup_env.sh`、附录 A 速查、`uvEnvApproach` 坑#5、`assessmentIdeas` 的 uv 题与 cheatsheet 题干；坑#5 措辞改为"真正风险是 uv pip 只认激活 env / `--python`，不认项目 venv"。
-- **M1**：`envs/quant/pyproject.toml` 的 `transformers>=4.45` → `>=5.0`（llmcompressor 0.12 要求 transformers v5）。
+- **C1（CRITICAL）uv pip 环境 bug**：所有 `uv pip install 'lm_eval[vllm]'` 一律改为 `cd course/<module> && uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'`。`uv pip` 未激活时只认 `--python <path>`、不绑定目标解释器（实测 `uv pip` 只认激活 env / `--python <path>`，不认项目 venv）。涉及各模块 `scripts/download_model.sh` 后的 extra 装配、附录 A 速查、`uvEnvApproach` 坑#4、`assessmentIdeas` 的 uv 题与 cheatsheet 题干；坑#4 措辞改为"真正风险是 uv pip 只认激活 env / `--python`，不认项目 venv"。
+- **M1**：各模块 `pyproject.toml` 的 `transformers>=4.45` → `>=5.0`（llmcompressor 0.12 要求 transformers v5）。
 - **m1**：`scripts.purpose` 与 `revisionNotes` 中"4 脚本已实测可用"降级为"**语法层 uv 0.8.x 解析通过；完整 sync + `lm_eval[vllm]` 装入目标 venv 待目标 H200 节点实测**"，与附录 B 口径统一。
 - **m3**：两个 `pyproject.toml` 的 `compressed-tensors>=0.9.0` → `>=0.10`。
 
