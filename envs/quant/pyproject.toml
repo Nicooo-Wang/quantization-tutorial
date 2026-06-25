@@ -4,20 +4,21 @@ version = "0.1.0"
 description = "Quantization env A (llm-compressor oneshot: FP8 / AWQ / SmoothQuant). Kept separate from the deploy env so vLLM does not lock the transformers version here."
 requires-python = ">=3.10,<3.13"
 # Lower bounds verified against PyPI (June 2026). The exact pinned graph lives
-# in uv.lock — `uv lock` + `uv sync` materialize it. Do NOT add torch: the vLLM
-# wheel ships a CUDA-12.8-matched torch, and adding torch separately overrides
-# that build and breaks FP8/INT8 kernels.
+# in uv.lock — `uv lock` + `uv sync` materialize it. Do NOT add torch separately:
+# let it resolve via transformers (a llmcompressor dep); pinning torch overrides
+# that build and can break FP8/INT8 kernels. vLLM lives in envs/deploy ONLY — it
+# pins transformers<5 and cannot coexist with llmcompressor 0.12 (needs v5).
 dependencies = [
-    "vllm>=0.11.0",            # PyPI is still 0.x (0.23.x as of Jun 2026); 'CalVer 25.x' refers to the NGC container tag, NOT the PyPI package
     "llmcompressor>=0.9.0",    # >=0.7 needed for mixed-precision config_groups; pin 0.9+ for the modern QuantizationModifier API (PyPI latest 0.12.0, which requires transformers v5)
     "compressed-tensors>=0.10",
-    "lm-eval>=0.4.5",          # core no longer bundles model backends -> ALSO run `uv pip install --python envs/quant/.venv/bin/python 'lm_eval[vllm]'` for the vLLM eval backend
+    "lm-eval>=0.4.5",          # eval via `--model local-completions` HTTP against the deploy env's vLLM server. NO vLLM here: it pins transformers<5, conflicting with llmcompressor's v5.
     "accelerate>=1.0",         # device_map / multi-gpu load during oneshot
     "datasets>=2.20",
     "transformers>=5.0",       # llmcompressor 0.12 requires transformers v5
     "safetensors>=0.4",
     "sentencepiece>=0.2",
-    "huggingface-hub[hf-transfer]>=0.26",  # hf_transfer = fast downloads; pulls hf-transfer
+    "huggingface-hub>=0.26",             # hub API + CLI (download_model.sh). NOTE: the [hf-transfer] extra was removed in huggingface-hub 1.x — add hf-transfer directly (below).
+    "hf-transfer>=0.1",                  # fast downloads; download_model.sh sets HF_HUB_ENABLE_HF_TRANSFER=1 (only takes effect if this pkg is installed)
     "ipytest>=0.14",           # notebook 内跑 pytest（隔离测试填空）
     "nbval>=0.11",             # pytest --nbval 执行 notebook 做输出回归
     "nbconvert>=7.0",          # nbconvert --execute / --clear-output
@@ -26,4 +27,4 @@ dependencies = [
 
 [tool.uv]
 [tool.uv.pip]
-# Let the vLLM wheel choose torch; never let uv downgrade it.
+# Let transformers/llmcompressor choose torch; never let uv downgrade it.
