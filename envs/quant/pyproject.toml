@@ -4,11 +4,15 @@ version = "0.1.0"
 description = "Quantization env A (llm-compressor oneshot: FP8 / AWQ / SmoothQuant). Kept separate from the deploy env so vLLM does not lock the transformers version here."
 requires-python = ">=3.10,<3.13"
 # Lower bounds verified against PyPI (June 2026). The exact pinned graph lives
-# in uv.lock — `uv lock` + `uv sync` materialize it. Do NOT add torch separately:
-# let it resolve via transformers (a llmcompressor dep); pinning torch overrides
-# that build and can break FP8/INT8 kernels. vLLM lives in envs/deploy ONLY — it
-# pins transformers<5 and cannot coexist with llmcompressor 0.12 (needs v5).
+# in uv.lock — `uv lock` + `uv sync` materialize it. torch MUST be a CUDA 12.8
+# (cu128) build to match this node's driver (570.x / CUDA 12.8): PyPI's default
+# torch is cu130 (CUDA 13), which fails CUDA init ("driver too old") on a 12.8
+# driver. We pin torch<2.12 and route it through the cu128 index (cu128 tops out
+# at 2.11.0, within llmcompressor 0.12's torch range [2.10, 2.12]). vLLM lives in
+# envs/deploy ONLY — it pins transformers<5 and cannot coexist with llmcompressor
+# 0.12 (needs v5).
 dependencies = [
+    "torch>=2.10,<2.12",       # cu128 build (see [tool.uv] below) — driver-matched; llmcompressor 0.12 wants torch in [2.10,2.12], cu128 tops out at 2.11.0
     "llmcompressor>=0.9.0",    # >=0.7 needed for mixed-precision config_groups; pin 0.9+ for the modern QuantizationModifier API (PyPI latest 0.12.0, which requires transformers v5)
     "compressed-tensors>=0.10",
     "lm-eval>=0.4.5",          # eval via `--model local-completions` HTTP against the deploy env's vLLM server. NO vLLM here: it pins transformers<5, conflicting with llmcompressor's v5.
@@ -26,5 +30,14 @@ dependencies = [
 ]
 
 [tool.uv]
-[tool.uv.pip]
-# Let transformers/llmcompressor choose torch; never let uv downgrade it.
+# torch/triton MUST come from the CUDA 12.8 (cu128) index to match the 570.x
+# driver. explicit=true means torch/triton resolve ONLY from this index (never
+# PyPI's cu130 default), so uv picks torch 2.11.0+cu128 within llmcompressor's range.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+triton = { index = "pytorch-cu128" }
