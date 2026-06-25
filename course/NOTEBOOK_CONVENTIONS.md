@@ -40,7 +40,7 @@
    ```python
    import torch
    if torch.cuda.is_available():
-       run_fp8_quantize("/shared/models/Qwen2.5-7B-Instruct", "./out/qwen-fp8")
+       run_fp8_quantize(MODEL_DIR, REPO_ROOT / "out" / "qwen-fp8")   # MODEL_DIR / REPO_ROOT 见 cell 2；out/ 已 gitignore
    else:
        print("跳过：无 GPU（CPU 环境只跑 L1/L2）")
    ```
