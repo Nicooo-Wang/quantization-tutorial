@@ -12,6 +12,15 @@ export const meta = {
 }
 
 const MODULE = args.module                 // 例 "m2-quant-pipeline"
+if (!MODULE || MODULE === 'undefined') {
+  // fail-fast：args 没传/没生效时，宁可大声失败，也不要静默跑去开发错的模块
+  // （上一轮 args 未传播，MODULE 渲染成 'undefined'，dev agent 误开发了 M1）
+  throw new Error(
+    `dev-module.js: 'module' arg 缺失或为 undefined (args=${JSON.stringify(args)})。` +
+    `调用方式：Workflow({scriptPath, args:{module:'<模块目录名>', skipDev:true}})。` +
+    `若你确实传了 args 仍看到此错，说明 Workflow 工具的 args 全局没传播——重跑前先诊断。`
+  )
+}
 const MODULE_PATH = `course/${MODULE}`
 const MAX_QA_ROUNDS = 3
 const MAX_STUDENT_ROUNDS = 3
