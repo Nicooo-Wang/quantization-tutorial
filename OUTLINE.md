@@ -103,7 +103,7 @@
 #### 1.3 SmoothQuant：把离群点迁移到权重（W8A8）（~55 分钟）
 - 📌 核心思想：通过**数学等价的 per-channel 缩放**，把激活离群点幅值"迁移"到权重上，使两边都易量化 → 变换后可走**纯 INT8 W8A8 GEMM**，无需运行时混合精度
 - 📌 公式：`Y = (X·diag(s)⁻¹)·(diag(s)·W)`，其中 `s_j = max(|X_j|)^α / max(|W_j|)^(1-α)`，α∈[0,1] 是迁移强度；α≈0.5 论文最优
-- ⚠️ 版本要点：llm-compressor 参数名是 **`smoothing_strength`（默认 0.8，即 α=0.8）**，**不是论文的 α**，且默认偏向多迁移到权重——这是最易写错的点
+- ⚠️ 版本要点：llm-compressor 参数名是 **`smoothing_strength`**（实测 0.12.0 的 `SmoothQuantModifier()` 类默认 = **0.5，即论文 α=0.5**）；课程在 s3/M2 刻意显式取 **α=0.8** 以偏向多迁权重——调用时写 `smoothing_strength=0.8`，别误以为 0.8 是库默认（这是最易写错的点）
 - 📌 教学深度：讲透"等价变换不改变数学结果但改变量化难度"这一贯穿全课的公理
 
 #### 1.4 AWQ：激活感知权重显著性 + per-group（W4A16）（~50 分钟）
@@ -197,7 +197,7 @@
   model.save_pretrained(SAVE_DIR, save_compressed=True)
   ```
 - 📌 `scheme="W8A8"` = 权重 per-channel 对称 INT8 + 激活 **dynamic per-token** 对称 INT8；**必须先 SmoothQuant 平滑**否则 INT8 激活量化精度崩
-- ⚠️ 导入路径：`SmoothQuantModifier` 在 `llmcompressor.modifiers.transform.smoothquant`（不是 `modifiers.smoothquant`）；`smoothing_strength` 默认 **0.8**（非论文 α=0.5）
+- ⚠️ 导入路径：`SmoothQuantModifier` 在 `llmcompressor.modifiers.transform.smoothquant`（不是 `modifiers.smoothquant`）；`SmoothQuantModifier()` 类默认 `smoothing_strength=0.5`（=论文 α）；课程显式取 0.8 偏向多迁权重
 - ⚠️ `ignore=["lm_head"]` 必须是**列表**（写成字符串会报错）
 - 📌 版本说明：以课程锁定的 llmcompressor 版本号为准（0.12.x）；如未来 0.9.0+ 引入 attention quantization/MXFP4/AutoRound，导入路径与 modifier 组合需重新核对
 
@@ -393,7 +393,7 @@ model.save_pretrained(SAVE_DIR)
 from llmcompressor.modifiers.transform.smoothquant import SmoothQuantModifier  # 注意路径
 from llmcompressor.modifiers.gptq import GPTQModifier
 recipe = [
-    SmoothQuantModifier(smoothing_strength=0.8),          # 默认 0.8，非论文 α=0.5
+    SmoothQuantModifier(smoothing_strength=0.8),          # 显式取 0.8（库默认 0.5=论文 α）
     GPTQModifier(targets="Linear", scheme="W8A8", ignore=["lm_head"]),  # ignore 必须是列表
 ]
 oneshot(model=model, dataset=ds, recipe=recipe,
@@ -459,7 +459,7 @@ curl -s http://localhost:8000/metrics | grep -E 'gpu_cache_usage_perc|num_gpu_bl
 8. **SmoothQuant 在 llmcompressor 0.9.0+ 的 API 稳定性**：两段式在 0.9.0+（2026-01 引入 attention quantization/MXFP4/AutoRound）下导入路径与 modifier 组合是否有变化？本轮未深挖 0.9.0+ 对 `SmoothQuantModifier` 的影响，建议 M2.5 标注以课程锁定的 llmcompressor 版本号（0.12.x）为准。
 9. **Qwen2.5-7B 三方法实测精度**：官方文档给的是 Llama 3 的 gsm8k 数字，Qwen2.5-7B 需课程实测。
 10. **Qwen2.5-7B 逐层敏感度结论**：社区无公开报告，需实测，不能套用 Llama 3 结论（lm_head 之外哪些层最敏感）。
-11. **`smoothing_strength` 在 Qwen2.5-7B 上的最优值**：默认 0.8，需 grid search（0.5/0.8/1.0 对比）。
+11. **`smoothing_strength` 在 Qwen2.5-7B 上的最优值**：库默认 0.5（=论文 α），课程取 0.8，需 grid search（0.5/0.8/1.0 对比）。
 12. **SmoothQuant W8A8 在 H200 上 vLLM 实际 kernel 名**（INT8-Marlin vs CUTLASS scaled_mm）：课堂上 `VLLM_LOGGING_LEVEL=DEBUG` 抓一次确认。
 13. **CUDA 12.8 driver 下限**：570.x 基于 NVIDIA 通用 release notes——具体 H200 SXM/PCIe 卡型与所用驱动分支（datacenter vs enterprise）是否一致，建议开课前在目标节点 `nvidia-smi` 实测确认。
 14. **M4 声明式部署「Qwen2.5 不需 trust_remote_code」的前置条件**：基于 `Qwen2ForCausalLM` 原生——若课程将来改用 Qwen2.5-MoE 或 Qwen3 等新架构，需重新核实其 `architectures` 字段是否在 vLLM 原生列表内。
