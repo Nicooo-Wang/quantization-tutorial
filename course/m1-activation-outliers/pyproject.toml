@@ -1,0 +1,35 @@
+[project]
+name = "m1-activation-outliers"
+version = "0.1.0"
+description = "M1 激活离群点与现代量化方法（原理层）env。从零用 PyTorch 实现量化数学（不调 llm-compressor）。模块自包含——本模块自己的 uv 项目，不依赖顶层 envs/。"
+requires-python = ">=3.10,<3.13"
+# torch 必须是 CUDA 12.8 (cu128) build 以匹配本节点驱动 (570.x / CUDA 12.8)：
+# PyPI 默认 torch 是 cu130，在 12.8 驱动上 CUDA 初始化失败。经 cu128 index 取 torch 2.11.0+cu128。
+# 注意：M1 从零实现量化数学，故**不含** llmcompressor/compressed-tensors（那是 M2 工具链）；
+#       额外加 matplotlib（s1 画 per-channel 激活幅值分布，M2 无此依赖）。
+dependencies = [
+    "torch>=2.10,<2.12",       # cu128 build（见 [tool.uv]）
+    "transformers>=5.0",       # 加载真 Qwen2.5（仅加载，不调 llm-compressor）
+    "accelerate>=1.0",         # device_map 多卡加载 7B
+    "datasets>=2.20",          # s1 取样本文本喂模型看激活
+    "matplotlib>=3.8",         # s1 画 per-channel 激活幅值分布（M1 特有）
+    "safetensors>=0.4",
+    "sentencepiece>=0.2",
+    "huggingface-hub>=0.26",   # hub API + hf CLI
+    "hf-transfer>=0.1",        # 快速下载；脚本设 HF_HUB_ENABLE_HF_TRANSFER=1
+    "ipytest>=0.14",           # notebook 内跑 pytest
+    "nbval>=0.11",             # pytest --nbval 输出回归
+    "nbconvert>=7.0",          # --execute / --clear-output
+    "jupyter>=1.0",            # 学员交互跑 notebook
+]
+
+[tool.uv]
+# torch/triton 必须从 cu128 index 取以匹配 570.x 驱动
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+triton = { index = "pytorch-cu128" }
