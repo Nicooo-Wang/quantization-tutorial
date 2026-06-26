@@ -26,7 +26,8 @@ const MODULE_PATH = `course/${MODULE}`
 const MAX_QA_ROUNDS = 3
 const MAX_STUDENT_ROUNDS = 3
 const CONV = 'course/NOTEBOOK_CONVENTIONS.md'   // 约定文档，agent 读取
-const SPEC = 'docs/superpowers/specs/2026-06-24-course-development-design.md'
+// SPEC 可按模块透传（args.spec，传 M1/M3/M4 各自 spec 路径）；缺省回退旧总 spec（向后兼容 M2）
+const SPEC = ARGS.spec || 'docs/superpowers/specs/2026-06-24-course-development-design.md'
 
 const DEV_REPORT = {
   type: 'object', additionalProperties: false,
