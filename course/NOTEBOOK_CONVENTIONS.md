@@ -23,7 +23,9 @@
 4. **填空代码 cells**：每个 `logic` 函数一个 cell，形如：
    ```python
    def build_fp8_recipe(ignore=("lm_head",)):
-       # TODO: 返回 QuantizationModifier(targets="Linear", scheme="FP8_DYNAMIC", ignore=list(ignore))
+       # TODO: 构造并返回 FP8 动态量化的 QuantizationModifier——按本函数 docstring 的语义
+       #   填 targets/scheme/ignore 三项：scheme 名去「原理」cell 查（别凭记忆），ignore 入参
+       #   是 tuple 要先转 list。这里只给方向，不给逐字实参（答案学员自己组合，别照抄）。
        raise NotImplementedError
    ```
    每 Step ≥2 个填空，逐步搭出本步能力。
