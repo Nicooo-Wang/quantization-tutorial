@@ -11,14 +11,15 @@ export const meta = {
   ],
 }
 
-const MODULE = args.module                 // 例 "m2-quant-pipeline"
+// args 在本环境以 JSON 字符串形式到达（probe 实测 argsType==='string'），统一解析成对象
+const ARGS = typeof args === 'string' ? JSON.parse(args) : (args || {})
+const MODULE = ARGS.module                 // 例 "m2-quant-pipeline"
 if (!MODULE || MODULE === 'undefined') {
-  // fail-fast：args 没传/没生效时，宁可大声失败，也不要静默跑去开发错的模块
-  // （上一轮 args 未传播，MODULE 渲染成 'undefined'，dev agent 误开发了 M1）
+  // fail-fast：module 缺失时宁可大声失败，也不要静默跑去开发错的模块
+  // （历史上 args.module 渲染成 'undefined'，dev agent 误开发了 M1）
   throw new Error(
-    `dev-module.js: 'module' arg 缺失或为 undefined (args=${JSON.stringify(args)})。` +
-    `调用方式：Workflow({scriptPath, args:{module:'<模块目录名>', skipDev:true}})。` +
-    `若你确实传了 args 仍看到此错，说明 Workflow 工具的 args 全局没传播——重跑前先诊断。`
+    `dev-module.js: 'module' arg 缺失或为 undefined (args=${JSON.stringify(ARGS)})。` +
+    `调用方式：Workflow({scriptPath, args:{module:'<模块目录名>', skipDev:true}})。`
   )
 }
 const MODULE_PATH = `course/${MODULE}`
@@ -78,7 +79,7 @@ const GATE = {
 // ---------- ① 开发 ----------
 phase('开发')
 let devReport
-if (args.skipDev) {
+if (ARGS.skipDev) {
   // notebook 已存在且 L1/L2 已验过；只做清单，跳过开发期（M2 用）
   devReport = await agent(`列出模块 ${MODULE}（${MODULE_PATH}/steps/）现有 notebook 清单。
 对每个 .ipynb：路径 + 填空数（含 NotImplementedError/TODO 的 code cell 数）。
