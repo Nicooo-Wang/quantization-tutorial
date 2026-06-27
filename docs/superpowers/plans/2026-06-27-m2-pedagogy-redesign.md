@@ -127,7 +127,7 @@ model(FP 原始) + dataset(校准文本) + recipe([modifier, ...])
 
 | 方法 | 权重 | 激活 | 数值格式 | 需补偿算法？ | recipe（modifier 组合） |
 |---|---|---|---|---|---|
-| **AWQ** (s2) | INT4 | FP16 | 整数 | 是（搜 scale 保护显著通道）| `AWQModifier()` + `GPTQModifier(scheme="W4A16_ASYM")` |
+| **AWQ** (s2) | INT4 | FP16 | 整数 | 是（搜 scale 保护显著通道）| `AWQModifier()` + `QuantizationModifier(scheme="W4A16_ASYM")` |
 | **SmoothQuant** (s3) | INT8 | INT8 | 整数 | 是（离群点迁到权重）| `SmoothQuantModifier()` + `GPTQModifier(scheme="W8A8")` |
 | **FP8** (s1) | FP8 | FP8 | 浮点 | **否**（浮点大动态范围，直接 cast）| `QuantizationModifier(scheme="FP8_DYNAMIC")` |
 
@@ -142,18 +142,28 @@ model(FP 原始) + dataset(校准文本) + recipe([modifier, ...])
 ```python
 # 最小演示：用一个 tiny 内存模型 + 通用 W8A8 scheme，把上面那条通路真跑一遍（CPU 可跑，不依赖 FP8 硬件）。
 # 目的不是产出可用模型，而是让你看到 "model + dataset + recipe → oneshot → 带 quantization_config 的产物" 这条数据流。
-from transformers import Qwen2Config, Qwen2ForCausalLM
+from transformers import Qwen2Config, Qwen2ForCausalLM, PreTrainedTokenizerFast
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
 from datasets import Dataset
+
+# oneshot 要 tokenizer 处理校准文本——内存 tiny 模型没有，构造一个词表对齐的 word-level tokenizer
+_tk = Tokenizer(WordLevel(vocab={str(i): i for i in range(320)}, unk_token="0"))
+_tk.pre_tokenizer = Whitespace()
+tiny_tok = PreTrainedTokenizerFast(tokenizer_object=_tk, unk_token="0", pad_token="0",
+                                   eos_token="0", bos_token="0", model_max_length=64)
 
 tiny = Qwen2ForCausalLM(Qwen2Config(
     num_hidden_layers=2, hidden_size=64, intermediate_size=128,
-    num_attention_heads=4, num_key_value_heads=2, vocab_size=320)).eval()
+    num_attention_heads=4, num_key_value_heads=2, vocab_size=320,
+    tie_word_embeddings=True)).eval()
 
-calib = Dataset.from_dict({"text": [" ".join("0 1 2 3 4")] * 4})   # 占位校准文本
+calib = Dataset.from_dict({"text": [" ".join(str(i % 50) for i in range(40))] * 4})   # 占位校准文本（词表内 token）
 
 recipe = [QuantizationModifier(scheme="W8A8", targets="Linear", ignore=["lm_head"])]  # 一个 modifier
 
-oneshot(model=tiny, dataset=calib, recipe=recipe, max_seq_length=32, num_calibration_samples=4)
+oneshot(model=tiny, tokenizer=tiny_tok, dataset=calib, recipe=recipe, max_seq_length=32, num_calibration_samples=4)
 demo_out = OUT_ROOT / "s0-demo-w8a8"
 demo_out.mkdir(parents=True, exist_ok=True)
 tiny.save_pretrained(demo_out)
@@ -209,7 +219,7 @@ git commit -m "feat(m2): add s0 pipeline overview (oneshot pipeline + 5 componen
 在 s2 标题 cell（cell 0）末尾追加（不改现有标题/目标）：
 ```markdown
 
-> **先看 s0**：本 lab 走的就是 s0 讲的那条 `oneshot(model, dataset, recipe)` 通路。AWQ 在通路里的位置 = **两段式 recipe**：第一段 `AWQModifier` 搜显著通道 scale，第二段 `GPTQModifier(W4A16_ASYM)` 压 INT4；激活保持 FP16（weight-only）。本 lab 目标：**端到端跑通 + 理解每步为何这么干**。
+> **先看 s0**：本 lab 走的就是 s0 讲的那条 `oneshot(model, dataset, recipe)` 通路。AWQ 在通路里的位置 = **两段式 recipe**：第一段 `AWQModifier` 搜显著通道 scale，第二段 `QuantizationModifier(W4A16_ASYM)` 压 INT4；激活保持 FP16（weight-only）。本 lab 目标：**端到端跑通 + 理解每步为何这么干**。
 ```
 
 - [ ] **Step 2: 在「原理」cell 后、填空说明前，插入「端到端四步 why」markdown cell**
@@ -225,13 +235,13 @@ AWQ 要挑「显著通道」（大激活对应的权重通道），**必须看�
 
 **② recipe 步——为什么是两段？**
 - 第一段 `AWQModifier()`：在校准数据上前向，为每个 Linear **搜 per-channel scale**（把显著权重通道放大，使其在 INT4 网格下相对误差变小）。这一段**不带参数**（网格搜索用默认候选值）。
-- 第二段 `GPTQModifier(scheme="W4A16_ASYM", targets="Linear", ignore=["lm_head"])`：把权重**真正压成 4-bit**，第一段算的 scale 在这里生效。三个参数各有 why：
+- 第二段 `QuantizationModifier(scheme="W4A16_ASYM", targets="Linear", ignore=["lm_head"])`：把权重**真正压成 4-bit**，第一段算的 scale 在这里生效。三个参数各有 why：
   - `targets="Linear"`：只量化 Linear 层（embedding/norm 等保持 FP）。
   - `scheme="W4A16_ASYM"`：4-bit 非对称（带 zero-point，适合权重分布）、group-wise（每 128 个权重共享一组 scale/zp）；激活不量化（A16）。
   - `ignore=["lm_head"]`：lm_head 对输出 logits 最敏感、量化易掉点，跳过。
 
 **③ oneshot 步——调用时内部发生什么？**
-回扣 s0 通路：`oneshot(model, dataset, recipe)` → 用校准数据前向收集激活 → 按 recipe 顺序：先 AWQModifier 搜 scale、再 GPTQModifier 压 INT4 → 保存。你填的 recipe 决定了它怎么量化。
+回扣 s0 通路：`oneshot(model, dataset, recipe)` → 用校准数据前向收集激活 → 按 recipe 顺序：先 AWQModifier 搜 scale、再 QuantizationModifier 压 INT4 → 保存。你填的 recipe 决定了它怎么量化。
 
 **④ 产物步——怎么验证量化对了？**
 读产物 `config.json` 的 `quantization_config`，确认 W4A16 证据：`weights.num_bits=4` / `weights.symmetric=False` / `weights.group_size=128` / `input_activations=None`（激活没量化）。这就是下面 `awq_config_summary` 要抽的字段。
@@ -243,7 +253,7 @@ AWQ 要挑「显著通道」（大激活对应的权重通道），**必须看�
 
 `build_awq_recipe` docstring 开头加：
 ```markdown
-**为什么这么设计（填前先想）**：这个函数产出 s0 通路里的 `recipe`——一个 modifier 有序列表。AWQ 要两段：第一段搜 scale（不带参数，回顾端到端第②步）、第二段压 INT4（要 targets/scheme/ignore，各参数 why 见端到端第②步）。scheme 用入参（别写死，便于复用）；ignore 入参是 tuple 要转 list（GPTQModifier 要求 list）。
+**为什么这么设计（填前先想）**：这个函数产出 s0 通路里的 `recipe`——一个 modifier 有序列表。AWQ 要两段：第一段搜 scale（不带参数，回顾端到端第②步）、第二段压 INT4（要 targets/scheme/ignore，各参数 why 见端到端第②步）。scheme 用入参（别写死，便于复用）；ignore 入参是 tuple 要转 list（QuantizationModifier 要求 list）。
 ```
 
 `build_calibration_dataset` docstring 开头加：

@@ -44,7 +44,7 @@ course/m2-quant-pipeline/steps/
 
 ### 4.2 五大组件（每个讲：是什么 / 为什么需要 / 什么格式）
 - **`dataset`**：校准数据。格式 = HuggingFace `Dataset`（`load_dataset(...)` 或 `Dataset.from_list(...)`），含 `text` 列，oneshot 内部用 tokenizer 处理。**为何需要**：量化算法要看真实激活分布（AWQ 挑显著通道、SmoothQuant 找离群点）才能决定 scale。
-- **`recipe`**：`[modifier1, modifier2, ...]`，一个**有序列表**。**为何是序列**：量化分步（如 AWQ 先用 AWQModifier 搜 scale、再用 GPTQModifier 压 INT4），顺序即流水线。
+- **`recipe`**：`[modifier1, modifier2, ...]`，一个**有序列表**。**为何是序列**：量化分步（如 AWQ 先用 AWQModifier 搜 scale、再用 QuantizationModifier 压 INT4），顺序即流水线。
 - **`modifier`**：一个量化步骤的封装（带 `scheme`/`targets`/`ignore` 等参数），如 `QuantizationModifier` / `AWQModifier` / `GPTQModifier` / `SmoothQuantModifier`。
 - **`scheme`**：量化方案字符串（`W4A16_ASYM` / `W8A8` / `FP8_DYNAMIC`），决定位宽 + 对称性 + 粒度（per-channel/group）。
 - **`quantization_config`**：产物 `config.json` 里的量化元数据（compressed-tensors 格式），记录「怎么量化的」，vLLM 据此加载。
@@ -54,7 +54,7 @@ course/m2-quant-pipeline/steps/
 
 | 方法 | 权重 | 激活 | 数值格式 | 需补偿算法？ | recipe（modifier 组合） |
 |---|---|---|---|---|---|
-| AWQ | INT4 | FP16 | 整数 | 是（搜 scale 保护显著通道）| `AWQModifier` + `GPTQModifier(W4A16_ASYM)` |
+| AWQ | INT4 | FP16 | 整数 | 是（搜 scale 保护显著通道）| `AWQModifier` + `QuantizationModifier(W4A16_ASYM)` |
 | SmoothQuant | INT8 | INT8 | 整数 | 是（离群点迁到权重）| `SmoothQuantModifier` + `GPTQModifier(W8A8)` |
 | FP8 | FP8 | FP8 | 浮点 | **否**（浮点大动态范围，直接 cast）| `QuantizationModifier(FP8_DYNAMIC)` |
 
@@ -66,12 +66,12 @@ s0 是**概念导览**（同 M1 s6/s7 的 CONV 例外）：以 markdown 讲解�
 ## 5. s2 AWQ lab 重写结构
 
 ### 5.1 开头：回顾 s0，定位 AWQ
-一句话回扣通路总览：AWQ 在 oneshot 通路里 = **两段式 recipe**（先用 AWQModifier 搜显著通道 scale、再用 GPTQModifier 压 INT4），激活保持 FP16（W4A16，weight-only）。点明「本 lab 目标：端到端跑通 + 理解每步为何」。
+一句话回扣通路总览：AWQ 在 oneshot 通路里 = **两段式 recipe**（先用 AWQModifier 搜显著通道 scale、再用 QuantizationModifier 压 INT4），激活保持 FP16（W4A16，weight-only）。点明「本 lab 目标：端到端跑通 + 理解每步为何」。
 
 ### 5.2 端到端讲解（markdown 大幅加强，每步讲 why）
 按通路顺序，每步先讲「是什么 / 为何需要 / 怎么做」：
 - **dataset 步**：为何 AWQ 要校准数据（要看激活幅值挑显著通道）、wikitext-2 格式与命名空间坑（`Salesforce/wikitext`）、为何 128–256 样本就够（AWQ 极省样本）。
-- **recipe 步**：为何 AWQ 是**两段**——第一段 AWQModifier 在校准数据上搜 per-channel scale（保护显著通道）；第二段 GPTQModifier 把权重压 INT4（第一段算的 scale 在此生效）。讲清 `targets`（量化谁）/ `scheme`（W4A16_ASYM 含义：4-bit 非对称 group-wise）/ `ignore`（为何排除 lm_head）各参数为何需要。
+- **recipe 步**：为何 AWQ 是**两段**——第一段 AWQModifier 在校准数据上搜 per-channel scale（保护显著通道）；第二段 QuantizationModifier 把权重压 INT4（第一段算的 scale 在此生效）。讲清 `targets`（量化谁）/ `scheme`（W4A16_ASYM 含义：4-bit 非对称 group-wise）/ `ignore`（为何排除 lm_head）各参数为何需要。
 - **oneshot 步**：调 `oneshot(model, dataset, recipe)` 时内部发生什么（回扣 s0 通路：前向收集统计 → 两段 modifier 顺序应用）、产物落哪。
 - **产物步**：怎么读 `quantization_config`，W4A16 的证据字段（`num_bits=4` / `symmetric=False` / `group_size=128` / `input_activations=None`）。
 
