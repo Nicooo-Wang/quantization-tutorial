@@ -70,11 +70,12 @@ const STUDENT_FB = {
 const GATE = {
   type: 'object', additionalProperties: false,
   properties: {
-    violations: { type: 'array', items: { type: 'string' } },   // steps/ 之外被改的文件
+    violations: { type: 'array', items: { type: 'string' } },   // 只放 steps/ 之外被改的文件路径（真违规）；无则 []
+    notes: { type: 'string' },                                  // 说明性文字（如"无可还原违规"）放这里，绝不进 violations（否则 scaffoldClean 假阴性）
     reverted: { type: 'array', items: { type: 'string' } },     // 已还原的文件
-    smokeOk: { type: 'boolean' },                               // uv sync + import 冒烟
+    smokeOk: { type: 'boolean' },                               // uv sync + 冒烟
   },
-  required: ['violations','reverted','smokeOk'],
+  required: ['violations','notes','reverted','smokeOk'],
 }
 
 // ---------- ① 开发 ----------
@@ -130,6 +131,14 @@ findings 用 severity 标注，每条给 action。verdict=pass 仅当无 critica
 phase('Student 试课')
 let studentResult = null
 for (let i = 0; i < MAX_STUDENT_ROUNDS; i++) {
+  // 先把当前 steps/ 提交到主工作树分支：worktree 是 git checkout 的副本，untracked/未提交改动不进副本，
+  // 故必须 commit，让即将启动的 student worktree（base=head）能拿到最新 notebook。
+  await agent(`把 ${MODULE_PATH}/steps/ 当前状态提交到当前分支，让即将启动的 student worktree 能拿到最新 notebook。
+在主工作树（repo root）跑：
+  git add ${MODULE_PATH}/steps/
+  git diff --cached --quiet || git commit -m "chore(${MODULE}): notebook snapshot before student round ${i+1}"
+若无可提交改动则跳过。一句话报告结果。`, { label: `快照(r${i+1})`, phase: 'Student 试课' })
+
   const fb = await agent(`你是【Student/学员】，真实用户代理，试课模块 ${MODULE}。
 你会得到一个隔离 git worktree（课程副本）。两端评估：
 (代码端) 在隔离 worktree 内跑完整流程：
@@ -157,10 +166,10 @@ for (let i = 0; i < MAX_STUDENT_ROUNDS; i++) {
 phase('完整性闸门')
 const gate = await agent(`核对模块 ${MODULE} 开发未污染脚手架。
 1. 跑 \`git status --porcelain\` 列所有改动。
-2. \`course/${MODULE}/steps/\` 之外的改动都是违规（尤其 pyproject.toml/uv.lock/scripts/workflows/README/顶层）。
+2. 只有 \`course/${MODULE}/steps/\` 之外的**被 git 跟踪的**改动才算违规（尤其 pyproject.toml/uv.lock/scripts/workflows/README/顶层）；untracked 的 \`.claude/\` 等会话产物不算违规。
 3. 对每个违规文件 \`git checkout HEAD -- <file>\` 还原；steps/ 下任何文件一律不动。
 4. 冒烟：\`cd course/${MODULE} && uv sync && uv run python -c "print('ok')"\`。
-按 schema 报 violations/reverted/smokeOk。`, { label: '完整性闸门', phase: '完整性闸门', schema: GATE })
+按 schema 报：violations=只列 steps/ 外被改的**文件路径**（无则 []；**绝不要**把"无违规""no tracked violations"之类的说明写进 violations——说明写进 notes，否则 scaffoldClean 会假阴性）；notes=说明性文字；reverted；smokeOk。`, { label: '完整性闸门', phase: '完整性闸门', schema: GATE })
 log(`完整性闸门: violations=${gate.violations.length}, smokeOk=${gate.smokeOk}`)
 
 // ---------- ⑥ 定稿（输出验收；merge/commit 由调用方做） ----------
