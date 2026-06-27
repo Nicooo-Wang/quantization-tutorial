@@ -109,7 +109,7 @@ for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) {
   const review = await agent(`你是【reviewer】，审模块 ${MODULE}（${MODULE_PATH}/steps/）。合一架构师+QA 角色后你就是唯一审核者。
 读 ${CONV} + ${SPEC} + OUTLINE 对应模块。
 **审内容**：结构/cell 顺序/准确性/教学法——**锚定每个 notebook 顶部「## 学完应能讲清」清单逐条判**（这条讲清没？），不靠泛泛"连贯"。
-**执行验证（代码跑通 gate，必做）**：对每个 notebook，把 dev 提供的参考实现（见开发报告：${JSON.stringify(devReport.referenceImpls)}）注入填空，跑：
+**执行验证（代码跑通 gate，必做）**：对每个 notebook，把参考实现注入填空（来源：dev 报告 referenceImpls；**若为空/skipDev（skipDev 模式，notebook 已存在），从 notebook 的 ipytest 测试语义反推每个填空的正确实现注入**），跑：
   cd ${MODULE_PATH} && uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=1800 steps/<nb>.ipynb
 L1(ipytest)+L2(tiny) 必过；L3(真模型) 有 GPU 必过、无 GPU 记 skip（算过）。报 execVerification（每 notebook l1/l2/l3 + passed + allPassed）。
 verdict=pass 仅当：无 critical/major findings **AND** execVerification.allPassed=true。
