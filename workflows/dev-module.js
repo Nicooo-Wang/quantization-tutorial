@@ -131,7 +131,7 @@ if (ARGS.skipDev) {
 为本模块每个 Step 创建/改 .ipynb（路径 ${MODULE_PATH}/steps/），严格按 ${CONV} 的 cell 顺序。**每个 notebook 标题 cell 后加「## 学完应能讲清」markdown（3-5 个关键问题，学完应能口头答）**——这是 reviewer/学员代理的检查锚点。
 填空设计：从零实现公式/算法，每步 ≥2 填空 + ≥1 判断型，每个填空有 ipytest。
 **提供每个填空的参考实现**（写进 referenceImpls 报告字段，或 ${MODULE_PATH}/steps/_solutions/ 旁路文件）——供 reviewer 注入跑执行验证。
-写完当场验证：\`cd ${MODULE_PATH} && uv sync\`，注入参考实现跑 L1(ipytest)+L2(tiny)+L3(真模型，无 GPU 则 skip)。提交前 \`nbconvert --clear-output\` + 删 cell metadata.execution。
+写完当场验证：\`cd ${MODULE_PATH} && uv sync\`，注入参考实现跑 L1(ipytest)+L2(tiny)+L3(真模型，无 GPU 则 skip)。**L3 cell 除 GPU 守卫外再加 \`os.environ.get('SKIP_L3')\` 守卫**——reviewer 执行验证设 SKIP_L3=1 跳过真 7B（太慢，只验 L1+L2 代码逻辑）；真人/学员跑时不设，L3 实证。形如 \`if torch.cuda.is_available() and not os.environ.get('SKIP_L3'): run_l3(...) else: print('跳过 L3')\`。提交前 \`nbconvert --clear-output\` + 删 cell metadata.execution。
 ${EDIT_SCOPE}${ENV_HELP}
 按 schema 报告。`, { label: '开发专家', phase: '开发', schema: DEV_REPORT })
 }
@@ -145,9 +145,10 @@ for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) {
 **审内容**：结构/cell 顺序/准确性/教学法——**锚定每个 notebook 顶部「## 学完应能讲清」清单逐条判**（这条讲清没？），不靠泛泛"连贯"。
 **执行验证（代码跑通 gate，必做）**：对每个 notebook，把参考实现注入填空（来源：dev 报告 referenceImpls；**若为空/skipDev（skipDev 模式，notebook 已存在），从 notebook 的 ipytest 测试语义反推每个填空的正确实现注入**），跑 nbconvert 全量执行：
 ${MULTI_ENV
-  ? `  多 env：按 notebook 所在子目录跑——\`uv run --directory ${MODULE_PATH}/<子目录> jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=1800 <子目录>/<nb>.ipynb\`。含 vLLM 子项目的先 \`cd ${MODULE_PATH}/<vllm子目录> && uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'\` 再跑（幂等）。`
-  : `  cd ${MODULE_PATH} && uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=1800 steps/<nb>.ipynb`}
-L1(ipytest)+L2(tiny) 必过；L3(真模型) 有 GPU 必过、无 GPU 记 skip（算过）。报 execVerification（每 notebook l1/l2/l3 + passed + allPassed）。
+  ? `  多 env：按 notebook 所在子目录跑——\`SKIP_L3=1 uv run --directory ${MODULE_PATH}/<子目录> jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=1800 <子目录>/<nb>.ipynb\`。含 vLLM 子项目的先 \`cd ${MODULE_PATH}/<vllm子目录> && uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'\` 再跑（幂等）。`
+  : `  cd ${MODULE_PATH} && SKIP_L3=1 uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=1800 steps/<nb>.ipynb`}
+**执行方式（重要，避免卡死）**：用上面的 **foreground** 命令一次跑完一个 notebook 并等其返回（Bash timeout 设 600000ms）。**严禁**把 nbconvert 放 background / 用 Monitor 或 TaskOutput 轮询 / 分离子进程等待——那样无法可靠检测 nbconvert 完成会无限挂起。命令前的 \`SKIP_L3=1\` 让 L3(真 7B) cell 自动跳过（notebook L3 cell 有 \`os.environ.get('SKIP_L3')\` 守卫），只验 L1(ipytest)+L2(tiny)，秒~分钟级。
+L1(ipytest)+L2(tiny) 必过；L3(真模型) 由 SKIP_L3=1 跳过（真 7B 太慢，留真人/学员 GPU 实证，workflow 只验代码逻辑）。报 execVerification（每 notebook l1/l2/l3=skip + passed + allPassed）。
 verdict=pass 仅当：无 critical/major findings **AND** execVerification.allPassed=true。
 按 schema 报 verdict/execVerification/findings/summary。
 ${EDIT_SCOPE}${ENV_HELP}（reviewer 只审 + 跑验证，**不改 notebook**——审改分离；改由 dev 在下一 agent 做）`,
@@ -156,7 +157,7 @@ ${EDIT_SCOPE}${ENV_HELP}（reviewer 只审 + 跑验证，**不改 notebook**—�
   log(`reviewer 第 ${i+1} 轮 verdict=${review.verdict}, execPassed=${review.execVerification.allPassed}, findings=${review.findings.length}`)
   if (review.verdict === 'pass') break
   await agent(`你是【dev】，按 reviewer findings 修模块 ${MODULE}（${MODULE_PATH}/steps/）。
-findings：${JSON.stringify(review)}。改掉所有 critical/major（合理采纳 minor）。改完对受影响 notebook 注入参考实现重跑 L1/L2 验证（\`uv run --directory ${MODULE_PATH}/<子目录> jupyter nbconvert --execute...\`）。
+findings：${JSON.stringify(review)}。改掉所有 critical/major（合理采纳 minor）。改完对受影响 notebook 注入参考实现重跑 L1/L2 验证（**foreground**，禁 background/Monitor 轮询：\`SKIP_L3=1 uv run --directory ${MODULE_PATH}/<子目录> jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=1800 <子目录>/<nb>.ipynb\`，Bash timeout 600000ms）。
 ${EDIT_SCOPE}${ENV_HELP}`,
     { label: `dev 修(r${i+1})`, phase: '审核' })
 }
