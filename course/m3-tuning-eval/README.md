@@ -26,6 +26,7 @@
    cd course/m3-tuning-eval/steps/vllm
    uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'
    ```
+   ⚠ **重要坑（已实测）**：`lm_eval` extra **不进 `uv.lock`**（与 vLLM wheel 自带的 transformers 可能互锁，故旁路）。**每次 `uv sync`（步骤 1）都会把它当作偏离 lock 的包卸载掉**——若 s7 报 `No module named 'lm_eval'`，重跑上面命令（幂等）。正确顺序：**先 `uv sync`，再装 extra**；之后只要再 sync 过，就要重装。vLLM env 的冒烟/检查一律用 `./.venv/bin/python`，不要用 `uv run`（会触发 sync）。
 3. **拉基线模型**（7B + 0.5B 下到本模块根 `./models/`，两子项目共享）：
    ```bash
    cd course/m3-tuning-eval
