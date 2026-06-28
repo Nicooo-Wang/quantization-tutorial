@@ -1,0 +1,35 @@
+[project]
+name = "m3-tuning-eval-quant"
+version = "0.1.0"
+description = "M3 量化+PPL env（llmcompressor layer fallback 重新量化 + PPL forward + matplotlib Pareto/敏感度图）。模块内双子项目之一。"
+requires-python = ">=3.10,<3.13"
+# torch 必须是 CUDA 12.8 (cu128) build 以匹配本节点驱动 (570.x / CUDA 12.8)：
+# PyPI 默认 torch 是 cu130，在 12.8 驱动上 CUDA 初始化失败。经 cu128 index 取 torch 2.11.0+cu128。
+dependencies = [
+    "torch>=2.10,<2.12",       # cu128 build（见 [tool.uv]）；llmcompressor 0.12 要 torch [2.10,2.12]
+    "llmcompressor>=0.9.0",    # 0.12 要 transformers v5；>=0.7 支持 mixed-precision config_groups
+    "compressed-tensors>=0.10",
+    "accelerate>=1.0",         # oneshot device_map / 多卡加载
+    "datasets>=2.20",          # 校准集（wikitext-2）
+    "transformers>=5.0",       # llmcompressor 0.12 requires transformers v5
+    "safetensors>=0.4",
+    "sentencepiece>=0.2",
+    "huggingface-hub>=0.26",   # hf CLI（download_model.sh 用子项目 .venv 的 hf）
+    "hf-transfer>=0.1",        # 快速下载；脚本设 HF_HUB_ENABLE_HF_TRANSFER=1
+    "matplotlib>=3.8",         # M3 新增（M2 不需要）：Pareto 曲线 + 逐层敏感度图
+    "ipytest>=0.14",           # notebook 内跑 pytest（L1）
+    "nbval>=0.11",             # pytest --nbval 输出回归
+    "nbconvert>=7.0",          # --execute / --clear-output
+    "jupyter>=1.0",            # 学员交互跑 notebook
+]
+
+[tool.uv]
+# torch/triton 必须从 cu128 index 取以匹配 570.x 驱动
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+triton = { index = "pytorch-cu128" }
