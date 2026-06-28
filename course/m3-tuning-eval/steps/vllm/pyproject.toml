@@ -1,0 +1,14 @@
+[project]
+name = "m3-tuning-eval-vllm"
+version = "0.1.0"
+description = "M3 vLLM 评测 env（downstream lm_eval + 性能/显存）。vLLM wheel 自带并锁定 CUDA12.8 配对的 torch/transformers，不另装。模块内双子项目之一。"
+requires-python = ">=3.10,<3.13"
+# 注意：lm_eval[vllm] extra 不进本 uv.lock —— 它由 uv pip install 装（见 README + OUTLINE 坑#4），
+# 学员/CI 手动 `uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'`。原因：extra 与 vllm wheel
+# 自带 transformers 可能互锁，放 uv.lock 会触发版本冲突；OUTLINE 附录 B open question #5 待实测统一。
+dependencies = [
+    "vllm>=0.11",            # PyPI 0.x（非 CalVer）；wheel 自带 torch/transformers，不要另装 torch（OUTLINE 坑#2）
+    "ipytest>=0.14",         # notebook 内 pytest（s7 L1）
+    "nbconvert>=7.0",        # --execute / --clear-output
+    "jupyter>=1.0",          # 学员交互跑 s7
+]
