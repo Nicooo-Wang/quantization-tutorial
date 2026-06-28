@@ -20,11 +20,45 @@ if (!MODULE || MODULE === 'undefined') {
   )
 }
 const MODULE_PATH = `course/${MODULE}`
+// M3 双 env：子项目→env 映射。无 envs（M1/M2/M4）时退化为单根 env（向后兼容，行为不变）。
+// envs 项形如 { dir: "steps/quant", smoke: "import llmcompressor,transformers,matplotlib" }
+const ENVS = (ARGS.envs && ARGS.envs.length) ? ARGS.envs : [{ dir: '', smoke: "print('ok')" }]
+const MULTI_ENV = ENVS.length > 1 || (ENVS.length === 1 && ENVS[0].dir)
+// 多 env 时注入 dev/reviewer/gate prompt 的运行说明（单 env 时为空，prompt 行为不变）
+const ENV_HELP = MULTI_ENV ? `
+
+【本模块是多 env（子项目隔离，重要）】notebook 在 ${MODULE_PATH}/steps/ 的**子目录**里，每个子目录是独立 uv 项目（自带 .venv）：
+${ENVS.map(e => `  - ${e.dir}/（uv 项目根 ${MODULE_PATH}/${e.dir}）`).join('\n')}
+
+运行/执行规则：
+- 每个 notebook 按其所在子目录跑：\`uv run --directory ${MODULE_PATH}/<子目录> <cmd>\`，或直接 \`${MODULE_PATH}/<子目录>/.venv/bin/python\`。
+- 模块根 ${MODULE_PATH} **没有 pyproject.toml**——绝不在模块根跑 \`uv sync\`（报 no project）；只在各子目录 uv sync。
+- setup cell 的 _find_module_root 用「scripts/ + steps/」判据找模块根（子项目自己有 pyproject.toml 但无 steps/，故别用 pyproject 判据）：
+  \`\`\`python
+  import pathlib
+  def _find_module_root(start):
+      p = pathlib.Path(start).resolve()
+      for cand in [p, *p.parents]:
+          if (cand / "scripts").is_dir() and (cand / "steps").is_dir():
+              return cand
+      raise RuntimeError("找不到模块根（含 scripts/ + steps/ 的目录）")
+  MODULE_ROOT = _find_module_root(pathlib.Path.cwd())
+  MODEL_DIR      = MODULE_ROOT / "models" / "Qwen2.5-7B-Instruct"
+  TINY_MODEL_DIR = MODULE_ROOT / "models" / "Qwen2.5-0.5B-Instruct"
+  OUT_ROOT       = MODULE_ROOT / "out"; OUT_ROOT.mkdir(parents=True, exist_ok=True)
+  \`\`\`
+- models/、out/ 在模块根共享（不在子目录），由上面的 MODULE_ROOT 解析。
+- vLLM 子项目（若含）：lm_eval[vllm] extra 不在 uv.lock——执行其 notebook 前先 \`cd ${MODULE_PATH}/<vllm子目录> && uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'\`（幂等）；vllm env 的冒烟/检查一律用 \`./.venv/bin/python\`（不用 uv run，会触发数分钟重装）。
+` : ''
+// gate 冒烟命令：多 env 遍历各子目录 sync + .venv/bin/python 冒烟；单 env 维持原行为
+const SMOKE_CMD = MULTI_ENV
+  ? ENVS.map(e => `cd ${MODULE_PATH}/${e.dir} && uv sync && ./.venv/bin/python -c "${e.smoke || "print('ok')"}"`).join(' && ')
+  : `cd course/${MODULE} && uv sync && uv run python -c "print('ok')"`
 const MAX_REVIEW_ROUNDS = 3
 const MAX_LEARNER_ROUNDS = 3
 const CONV = 'course/NOTEBOOK_CONVENTIONS.md'
 const SPEC = ARGS.spec || 'docs/superpowers/specs/2026-06-24-course-development-design.md'
-const EDIT_SCOPE = `编辑范围：只能创建/修改 ${MODULE_PATH}/steps/*.ipynb。严禁改 pyproject.toml、uv.lock、scripts/、workflows/、README.md、NOTEBOOK_CONVENTIONS.md、顶层任何文件。遇到 env/依赖/CLI 问题写进 findings 报告，不要自己改。`
+const EDIT_SCOPE = `编辑范围：只能创建/修改 ${MODULE_PATH}/steps/ 下的 .ipynb（含子目录，如 steps/quant/、steps/vllm/）。严禁改任何 pyproject.toml、uv.lock、scripts/、workflows/、README.md、NOTEBOOK_CONVENTIONS.md、顶层任何文件。遇到 env/依赖/CLI 问题写进 findings 报告，不要自己改。`
 
 const DEV_REPORT = {
   type: 'object', additionalProperties: false,
@@ -98,7 +132,7 @@ if (ARGS.skipDev) {
 填空设计：从零实现公式/算法，每步 ≥2 填空 + ≥1 判断型，每个填空有 ipytest。
 **提供每个填空的参考实现**（写进 referenceImpls 报告字段，或 ${MODULE_PATH}/steps/_solutions/ 旁路文件）——供 reviewer 注入跑执行验证。
 写完当场验证：\`cd ${MODULE_PATH} && uv sync\`，注入参考实现跑 L1(ipytest)+L2(tiny)+L3(真模型，无 GPU 则 skip)。提交前 \`nbconvert --clear-output\` + 删 cell metadata.execution。
-${EDIT_SCOPE}
+${EDIT_SCOPE}${ENV_HELP}
 按 schema 报告。`, { label: '开发专家', phase: '开发', schema: DEV_REPORT })
 }
 
@@ -109,19 +143,21 @@ for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) {
   const review = await agent(`你是【reviewer】，审模块 ${MODULE}（${MODULE_PATH}/steps/）。合一架构师+QA 角色后你就是唯一审核者。
 读 ${CONV} + ${SPEC} + OUTLINE 对应模块。
 **审内容**：结构/cell 顺序/准确性/教学法——**锚定每个 notebook 顶部「## 学完应能讲清」清单逐条判**（这条讲清没？），不靠泛泛"连贯"。
-**执行验证（代码跑通 gate，必做）**：对每个 notebook，把参考实现注入填空（来源：dev 报告 referenceImpls；**若为空/skipDev（skipDev 模式，notebook 已存在），从 notebook 的 ipytest 测试语义反推每个填空的正确实现注入**），跑：
-  cd ${MODULE_PATH} && uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=1800 steps/<nb>.ipynb
+**执行验证（代码跑通 gate，必做）**：对每个 notebook，把参考实现注入填空（来源：dev 报告 referenceImpls；**若为空/skipDev（skipDev 模式，notebook 已存在），从 notebook 的 ipytest 测试语义反推每个填空的正确实现注入**），跑 nbconvert 全量执行：
+${MULTI_ENV
+  ? `  多 env：按 notebook 所在子目录跑——\`uv run --directory ${MODULE_PATH}/<子目录> jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=1800 <子目录>/<nb>.ipynb\`。含 vLLM 子项目的先 \`cd ${MODULE_PATH}/<vllm子目录> && uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'\` 再跑（幂等）。`
+  : `  cd ${MODULE_PATH} && uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=1800 steps/<nb>.ipynb`}
 L1(ipytest)+L2(tiny) 必过；L3(真模型) 有 GPU 必过、无 GPU 记 skip（算过）。报 execVerification（每 notebook l1/l2/l3 + passed + allPassed）。
 verdict=pass 仅当：无 critical/major findings **AND** execVerification.allPassed=true。
 按 schema 报 verdict/execVerification/findings/summary。
-${EDIT_SCOPE}（reviewer 只审 + 跑验证，**不改 notebook**——审改分离；改由 dev 在下一 agent 做）`,
+${EDIT_SCOPE}${ENV_HELP}（reviewer 只审 + 跑验证，**不改 notebook**——审改分离；改由 dev 在下一 agent 做）`,
     { label: `reviewer(r${i+1})`, phase: '审核', schema: REVIEW })
   reviewerResult = review
   log(`reviewer 第 ${i+1} 轮 verdict=${review.verdict}, execPassed=${review.execVerification.allPassed}, findings=${review.findings.length}`)
   if (review.verdict === 'pass') break
   await agent(`你是【dev】，按 reviewer findings 修模块 ${MODULE}（${MODULE_PATH}/steps/）。
-findings：${JSON.stringify(review)}。改掉所有 critical/major（合理采纳 minor）。改完对受影响 notebook 注入参考实现重跑 L1/L2 验证（\`cd ${MODULE_PATH} && uv sync && uv run jupyter nbconvert --execute...\`）。
-${EDIT_SCOPE}`,
+findings：${JSON.stringify(review)}。改掉所有 critical/major（合理采纳 minor）。改完对受影响 notebook 注入参考实现重跑 L1/L2 验证（\`uv run --directory ${MODULE_PATH}/<子目录> jupyter nbconvert --execute...\`）。
+${EDIT_SCOPE}${ENV_HELP}`,
     { label: `dev 修(r${i+1})`, phase: '审核' })
 }
 
@@ -155,7 +191,7 @@ const gate = await agent(`核对模块 ${MODULE} 开发未污染脚手架。
 1. \`git status --porcelain\` 列所有改动。
 2. 只有 \`course/${MODULE}/steps/\` 之外的**被 git 跟踪的**改动才算违规；untracked 的 \`.claude/\` 等会话产物不算。
 3. 对每个违规文件 \`git checkout HEAD -- <file>\` 还原；steps/ 下不动。
-4. 冒烟：\`cd course/${MODULE} && uv sync && uv run python -c "print('ok')"\`。
+4. 冒烟：\`${SMOKE_CMD}\`。
 按 schema 报：violations=只列 steps/ 外被改文件路径（无则 []，说明写进 notes）；notes；reverted；smokeOk。`, { label: '完整性闸门', phase: '完整性闸门', schema: GATE })
 log(`完整性闸门: violations=${gate.violations.length}, smokeOk=${gate.smokeOk}`)
 
