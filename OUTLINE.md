@@ -252,9 +252,9 @@
 #### 3.7 评测方法论：性能 + 质量（~55 分钟）
 - 📌 **性能测量**：`vllm bench serve`（测 online serving 吞吐 + TTFT，输出 mean/median/P99） / `vllm bench throughput`（离线吞吐） / `vllm bench latency`（端到端延迟）
 - ⚠️ 方法学坑：V1 引擎下用 `llm.generate()` 拿 per-request TTFT **不可靠**，**必须用 server 端 `/metrics` + `vllm bench serve`**
-- 📌 **显存拆分（权重 vs KV-Cache）**：推荐读 vLLM `/metrics`（Prometheus）的 `vllm:gpu_cache_usage_perc` / `num_gpu_blocks`；**差值法**（空载记权重基线、长上下文生成记峰值、差值≈KV-Cache）有 nvidia-smi 偏差（显示进程已映射显存，会**高估**实际 KV 占用），课程要讲清这个偏差。**抓取命令示例**：
+- 📌 **显存拆分（权重 vs KV-Cache）**：推荐读 vLLM `/metrics`（Prometheus）的 `vllm:kv_cache_usage_perc` / `num_gpu_blocks`；**差值法**（空载记权重基线、长上下文生成记峰值、差值≈KV-Cache）有 nvidia-smi 偏差（显示进程已映射显存，会**高估**实际 KV 占用），课程要讲清这个偏差。**抓取命令示例**：
   ```bash
-  curl -s http://localhost:8000/metrics | grep -E 'gpu_cache_usage_perc|num_gpu_blocks'
+  curl -s http://localhost:8000/metrics | grep -E 'kv_cache_usage_perc|num_gpu_blocks'
   ```
 - 📌 **质量评估**：`lm_eval` 跑 `ceval-valid,cmmlu,mmlu,gsm8k`，量化前后用**相同 seed/prompt/num_fewshot**；lm-eval 核心包不含 model backend，需 `lm_eval[vllm]` extra
 - 📌 在线评测模板（harness 走 vLLM OpenAI 端点）：
@@ -314,7 +314,7 @@
 
 #### 4.3 部署性能压测（~40 分钟）
 - 📌 `vllm bench serve --backend vllm --base-url http://localhost:8000 --model <name> --dataset-name sharegpt --num-prompts 1000` → 吞吐 + TTFT(mean/median/P99)
-- 📌 读 `/metrics` 看 KV-Cache 占用与 residency（示例：`curl -s http://localhost:8000/metrics | grep -E 'gpu_cache_usage_perc|num_gpu_blocks'`）
+- 📌 读 `/metrics` 看 KV-Cache 占用与 residency（示例：`curl -s http://localhost:8000/metrics | grep -E 'kv_cache_usage_perc|num_gpu_blocks'`）
 - ⚠️ 评测坑：V1 引擎下 `llm.generate()` 测 TTFT **不可靠** → 用 `/metrics` + `vllm bench serve`；显存差值法（nvidia-smi）会**高估** KV-Cache
 - 🛠 动手：对三种量化模型 + FP16 基线在 H200×8 上压测，生成吞吐/TTFT/显存对比
 
@@ -444,7 +444,7 @@ vllm bench serve --backend vllm --base-url http://localhost:8000 \
     --model <name> --dataset-name sharegpt --num-prompts 1000
 
 # === 读 vLLM /metrics（权重 vs KV-Cache 显存拆分）===
-curl -s http://localhost:8000/metrics | grep -E 'gpu_cache_usage_perc|num_gpu_blocks'
+curl -s http://localhost:8000/metrics | grep -E 'kv_cache_usage_perc|num_gpu_blocks'
 ```
 
 ## 附录 B：需在开课前实测确认的点（专家标注的 open questions）
@@ -480,7 +480,7 @@ curl -s http://localhost:8000/metrics | grep -E 'gpu_cache_usage_perc|num_gpu_bl
 **【覆盖澄清建议，一并落实】**：
 
 - **(a) M2.2 统一基线**：明确为 **Qwen2.5-7B-Instruct**（与 `download_model.sh` 默认 `MODEL_REPO` 对齐），并点出 base vs Instruct 在指令遵循任务上的评测差异。
-- **(b) M3.7 `/metrics` 抓取示例**：补 `curl -s http://localhost:8000/metrics | grep -E 'gpu_cache_usage_perc|num_gpu_blocks'`（M4.3 与附录 A 同步补）。
+- **(b) M3.7 `/metrics` 抓取示例**：补 `curl -s http://localhost:8000/metrics | grep -E 'kv_cache_usage_perc|num_gpu_blocks'`（M4.3 与附录 A 同步补）。
 - **(c) M2.4 Falcon group_size=64**：降为脚注（Qwen2.5 不受此限，非主流程）。
 - **(d) M4.2 TP=2+数据并行**：给最小说明（单节点起多实例 `--tensor-parallel-size 2` + 负载均衡），并标注编排属运维范畴、超纲不实操。
 - **(e) m4 ignore 正则归位**：M2.3 只讲精确 `ignore=["lm_head"]`，正则 `re:` 前缀统一放 M3.3 讲透。
