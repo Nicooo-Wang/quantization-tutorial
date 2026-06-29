@@ -1,0 +1,10 @@
+# 共享产物（两子项目都写）
+models/
+out/
+
+# 双子项目各自的 venv（不进 repo；lm_eval[vllm] extra 装在 vllm/.venv，不锁）
+steps/*/.venv/
+steps/*/__pycache__/
+
+# ipython / jupyter
+.ipynb_checkpoints/
