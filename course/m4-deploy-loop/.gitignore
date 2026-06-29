@@ -1,0 +1,8 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# Downloaded models & outputs (target of scripts/download_model.sh / notebook writes)
+models/
+out/
