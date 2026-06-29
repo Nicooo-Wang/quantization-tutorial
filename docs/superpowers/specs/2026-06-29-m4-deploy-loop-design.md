@@ -102,6 +102,25 @@ M4 核心是"**起 vllm 服务 + 压测**"——vllm serve 是阻塞进程、且
 
 M4 反复讲"声明式、无需改代码"，但必须讲死其**前提**——否则学员误以为"任何模型量化后都不用改代码"。这是本模块最易被误读处，单列一节作为 s1/s4 的教学锚点。
 
+**谁适配谁（方向性认知，必讲）**：声明式部署 = **vLLM 读你的 `quantization_config` 自动适配你的模型**，不是你去适配 vLLM。你只负责"产出正确的量化产物"（标准 scheme 量化 → 正确 packed 权重 + 把 `quantization_config` 写进 `config.json`），vLLM 读它自动选架构实现 + 量化 kernel——你夹在中间不写任何适配代码。llm-compressor 的 `save_pretrained` 自动把 `quantization_config` 写进 `config.json`，这就是"声明"的来源。
+
+**vLLM 适配全过程（内部 6 步，`vllm serve` 启动时自动做）**：
+1. 读 `config.json` 的 `architectures`（如 `Qwen2ForCausalLM`）→ 查 `ModelRegistry` 找架构实现类（attention/MLP/forward）。**层①架构适配**。
+2. 读 `quantization_config`（`quant_method`）→ 查 quantization registry 找量化方法类 + 解析 `config_groups` 确定"哪些层用哪种 scheme"。**层②量化适配**。
+3. 遍历模型层，给被量化的层套对应 kernel wrapper（`targets` 决定哪些层、`scheme` 决定 FP8/AWQ/INT8 哪个 kernel）。
+4. 加载 packed 权重 + scale/zero_point 张量塞进 wrapper（`group_size` 决定分组粒度）。
+5. **profile run**（跑 dummy 输入探测 KV-Cache 块数）——**这就是"验证"**：vLLM 启动自带、不是你写的；报错（`No compatible kernel found` / OOM）= 三条件某个不满足。
+6. 起服务接请求。
+
+**config 字段 → vLLM 适配步骤的映射**（s1 构造型填空的认知基础——学员懂了这个映射，才能从"量化需求"推导出"该写什么 config"，而非机械抄 JSON）：
+
+| `quantization_config` 字段 | 驱动 vLLM 哪步 |
+|---|---|
+| `targets` | 步骤③ 哪些层套 kernel wrapper |
+| `scheme`（FP8_DYNAMIC / W4A16 / W8A8 等）| 步骤③ 选哪个 kernel |
+| `num_bits` / `group_size` | 步骤③-④ 权重打包粒度 |
+| `ignore` | 步骤③ 跳过哪些层（保持高精度）|
+
 **两层适配**（vLLM 加载量化模型要两层都通）：
 ```
 config.json
@@ -128,24 +147,30 @@ config.json
 
 每个 notebook 套 M2/M3 教学法：标题 cell + 一句话目标 + 对应 OUTLINE 课时 → 「## 学完应能讲清」清单（3-5 条）→ 导入/setup cell → 讲解 markdown → 摸一摸 cell → 填空代码 cell（每函数一个，docstring 含「为什么这么设计」）→ ipytest L1 → L2 结构验证 → L3 vllm 真跑（GPU + SKIP_L3 双守卫）。提交前 `nbconvert --clear-output` + 删 cell metadata.execution。
 
-### s1 — vLLM 加载量化模型：auto 识别 + flag/kernel 速查 + 声明式边界（4.1，~50min）
+### s1 — vLLM 加载量化模型：auto 识别 + quantization_config 构造 + 声明式边界（4.1，~50min）
+
+> **本节是 M4 声明式核心**：不止让学员"读懂 config"，而是理解 `quantization_config` 结构后**能自己写出来**——从"机械照提示填"升级到"理解字段含义、自己产出正确 config"。
 
 **学完应能讲清**：
-1. vLLM `--quantization` 默认 `auto` 读 `config.json` 的 `quantization_config` 自动识别，多数情况**不传 flag** 才是对的——为什么不传反而对？
-2. 声明式部署的**两个前提**是什么？（架构 vLLM 已支持 + 量化用标准 scheme）给出一个"bf16 能跑但量化报错"的场景说明为什么。
-3. bf16 能跑的模型，量化后直接声明式跑通需满足**哪三个条件**？`No compatible kernel found` 对应哪个不满足？
-4. 三方法（FP8/AWQ/SmoothQuant）各走哪个 kernel？遗留 AutoAWQ 为什么 flag 是 `auto_awq`（带下划线）不是 `awq`？
+1. "适配"是谁适配谁？——是 **vLLM 读 `quantization_config` 适配你的模型**，不是你适配 vLLM。你产出量化产物后，从 `vllm serve` 到服务起来，vLLM 替你做了什么？
+2. vLLM 加载量化模型内部经历哪几步？`quantization_config` 的哪个字段驱动 vLLM 给某层选哪个 kernel？（`targets`→哪些层、`scheme`→哪个 kernel、`group_size`→权重分组粒度、`ignore`→跳过哪些层）
+3. compressed-tensors 的 `quantization_config` 有哪些关键字段（`config_groups`/`targets`/`scheme`/`num_bits`/`group_size`/`ignore`）？给定一个量化需求（如"FP8 量化除 lm_head 外所有 linear 层"），你能写出对应结构吗？
+4. 声明式部署的**两个前提**（架构 vLLM 已支持 + 量化用标准 scheme）+ **三条件**（标准 scheme + 权重布局符合 kernel 契约 + vLLM 补了该架构 quantized 层）；`No compatible kernel found` 对应哪个不满足？
+5. 三方法（FP8/AWQ/SmoothQuant）各走哪个 kernel？为什么多数情况**不传 `--quantization` flag** 反而对？遗留 AutoAWQ 为什么 flag 是 `auto_awq`（带下划线）不是 `awq`？
 
-**摸一摸**：打印一个 7B 量化产物（M2/M3 out）的 `config.json` 的 `quantization_config`；列 vllm 支持的 quantization scheme。
+**讲解**（声明式核心，详见 §5）：**谁适配谁**——你只产出正确产物（`config.json` 的 `quantization_config` + 正确 packed 权重），vLLM 读 config 自动适配（选架构实现 + 量化 kernel），你不写适配代码。**vLLM 内部 6 步**：① 读 `architectures` 查 ModelRegistry → ② 读 `quantization_config` 查 quantization registry + 解析 `config_groups` → ③ 遍历层给被量化层套 kernel wrapper（`targets`→哪些层、`scheme`→哪个 kernel）→ ④ 加载 packed 权重（`group_size`→粒度）→ ⑤ profile run 验证（vLLM 自带、非你写；报错=三条件违反）→ ⑥ serve。**字段→步骤映射**是学员"从需求推导 config"的认知基础。
 
-**填空**（2 个）：
-1. `detect_quant_scheme(model_path)` — 读 `config.json` 的 `quantization_config`，返回 `(quant_method, scheme)` 或 `None`（FP16 无量化配置）。**为什么这么设计**：vLLM `auto` 识别的依据就是这个字段——本函数让学员亲手解析它，理解"声明式靠的是 config.json 里这一段元数据"，而不是凭 flag 猜。
-2. `pick_vllm_flag_and_kernel(scheme)` — 给 scheme 返回 `(vllm_flag_or_None, kernel_name)` 速查（FP8→(None/CUTLASS scaled_mm)、AWQ→(None/Marlin/Machete)、SmoothQuant INT8→(None/INT8-Marlin)、遗留 AutoAWQ→('auto_awq'/awq_marlin)）。**为什么这么设计**：flag/kernel 速查是 4.1 的核心交付物；多数"不传 flag"体现 auto 的便利，遗留 `auto_awq` 的下划线是高频坑。
+**摸一摸**：打印一个 7B 量化产物（M2/M3 out）完整 `quantization_config`（看 `config_groups` 结构）；对比 FP8/AWQ/SmoothQuant 三种 `config_groups` 的字段差异；列 vllm 支持的 quantization scheme。
 
-**ipytest**：测 `detect` + `pick` 对 FP8/AWQ/SmoothQuant/FP16 四种 config 的正确判断（喂四种 config.json 样本）。
+**填空**（3 个，理解-构造-速查递进）：
+1. `detect_quant_scheme(model_path)` — 读 `config.json` 的 `quantization_config`，返回结构化信息（scheme + 被量化的 targets + 粒度），FP16 返回 None。**为什么这么设计**：先"读懂"——亲手解析 `config_groups`，理解"哪些层用什么 scheme"这个结构是 vLLM 步骤②③适配的依据，而不是把 config 当黑盒。
+2. `build_quantization_config(scheme, targets, num_bits=None, group_size=None, ignore=())` — **构造** compressed-tensors 的 `quantization_config` 字典（`config_groups` + `ignore` 结构）。**为什么这么设计（理解型核心）**：这是"自己写出 config"——从量化需求（如"FP8 量化除 lm_head 外所有 linear 层"/"AWQ W4A16 group_size=128"）推导出正确字段结构。**docstring 只给字段语义和约束（`group_size` 须整除 hidden_size、`ignore` 决定哪些层保持高精度、`targets` 用 `re:.*Linear` 之类匹配），不给逐字实参**——学员要理解每个字段驱动 vLLM 哪步、该填什么值，而不是照抄一段 JSON。
+3. `pick_vllm_flag_and_kernel(scheme)` — 给 scheme 返回 `(vllm_flag_or_None, kernel_name)` 速查（FP8→(None/CUTLASS scaled_mm)、AWQ→(None/Marlin/Machete)、SmoothQuant INT8→(None/INT8-Marlin)、遗留 AutoAWQ→('auto_awq'/awq_marlin)）。**为什么这么设计**：scheme→flag/kernel 速查逻辑化；多数"不传 flag"体现 auto 的便利，`auto_awq` 下划线是高频坑。
 
-**L2**：解析真实 0.5B config.json 结构（无量化 → detect 返回 None；若有量化产物则验结构）。CPU 可跑。
-**L3**（GPU+SKIP_L3）：0.5B `vllm.LLM().generate()` 离线加载跑一句；7B 三方法产物各 `LLM()` 加载 generate。
+**ipytest**：测 `detect`（FP8/AWQ/SmoothQuant/FP16 四种 config 样本）；`build_quantization_config`（FP8 全量化 / AWQ W4A16 group_size / 带 `ignore` 排除 lm_head 三种场景生成正确结构 + `group_size` 不整除报错）；`pick`（四 scheme 映射）。
+
+**L2**：解析真实 config 样本验 detect 逻辑（0.5B FP16 → None；跨模块 M2/M3 量化产物 → 验 `config_groups` 结构；缺产物用内联样本兜底）。CPU 可跑。
+**L3**（GPU+SKIP_L3）：0.5B `vllm.LLM().generate()` 离线加载跑一句；7B 三方法产物各 `LLM()` 加载 generate，验证 auto 识别 + kernel 选择。
 
 ### s2 — H200×8 多卡部署（4.2，~50min）
 
@@ -269,4 +294,4 @@ config.json
 | 4.6 端到端闭环 mini 项目 | **s5**（finale 前半）| 决策树 + 交付物四件套 |
 | 4.7 QAT + NVFP4 前瞻 | **s5**（finale 末尾 markdown）| 纯概念，不填空 |
 
-**填空总计**：10 个（5 notebook × 2），每个有 ipytest。
+**填空总计**：11 个（s1 有 3 个、其余各 2），每个有 ipytest。
