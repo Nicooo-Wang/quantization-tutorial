@@ -1,0 +1,13 @@
+[project]
+name = "m4-deploy-loop"
+version = "0.1.0"
+description = "M4 vLLM 声明式部署与端到端闭环（单 env：vllm + ipytest + nbconvert + jupyter）。vLLM wheel 自带并锁定 CUDA12.8 配对的 torch/transformers，不另装。不装 lm_eval（部署用 vllm bench/metrics，非评测）、不装 huggingface_hub（Hub 发布已砍）。"
+requires-python = ">=3.10,<3.13"
+# vLLM wheel 自带 torch/transformers（CUDA 12.8 配对）——不要另装 torch（OUTLINE 坑#2，会覆盖 vllm build 破坏 FP8/INT8 kernel）。
+# 不装 lm_eval（M4 不评测）、不装 huggingface_hub（Hub 砍）——env 干净，无 extra 旁路坑。
+dependencies = [
+    "vllm>=0.11",            # PyPI 0.x（非 CalVer）；wheel 自带 torch/transformers
+    "ipytest>=0.14",         # notebook 内 pytest（L1）
+    "nbconvert>=7.0",        # --execute / --clear-output
+    "jupyter>=1.0",          # 学员交互跑
+]
