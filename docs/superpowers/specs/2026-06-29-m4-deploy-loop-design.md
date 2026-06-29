@@ -38,7 +38,7 @@ course/m4-deploy-loop/
 
 **单 env**（不需要 llmcompressor，避免 M3 的 quant+vllm 双 env）：`vllm>=0.11`（PyPI 0.x，wheel 自带 torch/transformers，不另装 torch）+ `ipytest>=0.14` + `nbconvert>=7.0` + `jupyter>=1.0`。
 
-**`lm_eval[vllm]` extra 旁路装**（照 M3 s7 模式）：extra 不进 `uv.lock`（与 vLLM wheel 自带 transformers 可能互锁），学员/CI 手动 `cd course/m4-deploy-loop && uv pip install --python ./.venv/bin/python 'lm_eval[vllm]'`。notebook 内 `try/except ImportError` 优雅降级（`HAS_LM_EVAL` flag），未装时降级为命令构造（不真跑 lm_eval）。
+**不装 `lm_eval` / `huggingface_hub`（YAGNI）**：M4 是部署模块——压测用 `vllm bench serve` + `/metrics`（vllm 自带），**不跑下游评测**（评测属 M3 s7 的 lm_eval）；Hub 发布已砍（§1），s5 仅 markdown 提示不实操 `upload_folder`。故 env 只需 `vllm + ipytest + nbconvert + jupyter`，**无 extra 旁路坑**（不像 M3 s7 要手动装 lm_eval[vllm]）。
 
 **dev-module.js 单 env 向后兼容**：调用 `Workflow({scriptPath, args:{module:'m4-deploy-loop'}})`（不带 `envs`）→ 退化为单根 env，行为同 M1/M2。
 
@@ -71,7 +71,7 @@ M4 是纯 vllm env（不自己量化），需要现成的 compressed-tensors 产
 - **FP16 基线**（s3 压测对比用）：download 脚本拉的 7B 本身，作"三量化 + FP16"四向对比的基线。
 
 **README 双前置说明**：
-1. 本 env：`cd course/m4-deploy-loop && uv sync` + 装 `lm_eval[vllm]` extra。
+1. 本 env：`cd course/m4-deploy-loop && uv sync`（M4 用 vllm bench/metrics 压测，不装 lm_eval；env = vllm + ipytest + nbconvert + jupyter）。
 2. 跨模块：s1-s5 的 L3 真部署需要 M2/M3 产出的 7B 量化模型——先跑完 M2（FP8/AWQ/SmoothQuant）+ M3（调优）。**0.5B 路径不需此前置**（L2 流程验证独立可跑）。
 
 ---
@@ -277,7 +277,6 @@ config.json
 | 跨模块路径耦合（M4 依赖学员跑过 M2/M3）| 0.5B 兜底（L2 流程独立可跑）+ README 双前置 + 友好报错 |
 | vllm 版本敏感（PyPI 0.x，flag/kernel 名易变）| 照 OUTLINE 附录 A 速查（2026-06 实测）；pyproject 下限 `>=0.11`，不写 CalVer |
 | L3 真 7B serve 极重（分钟级 + 多卡）| 全走 SKIP_L3=1；workflow 只验 L1+L2 代码逻辑，运行时留学员 GPU |
-| `lm_eval[vllm]` extra 被 `uv sync` 卸载（M3 坑）| README 文档化"先 sync 再装 extra"；notebook `try/except` 降级 |
 | reviewer agent 偏离 prompt 用 background nbconvert（M3 坑）| dev-module.js prompt 已强制 foreground + 禁 Monitor/TaskOutput（M3 af3d9be 已修，M4 复用）|
 
 ---
