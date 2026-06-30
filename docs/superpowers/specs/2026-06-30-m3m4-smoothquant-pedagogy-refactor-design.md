@@ -21,6 +21,30 @@
 - ✅ 改：M3 `s5_pareto_tuning` / `s6_group_size`（quant env）+ `s7_evaluation`（vllm env）+ M4 `s1`–`s5`。
 - ❌ 不动：M3 s1–s4（用户明确）、M1、M2、各模块脚手架（pyproject/uv.lock/scripts/README/CONV）、dev-module.js workflow 脚本本身（复用现有 5 阶段）。
 
+### 工业端到端量化评估流程（教程覆盖映射）
+
+完整工业流程（确定 SmoothQuant 后到部署上线）与教程覆盖：
+
+| 阶段 | 环节 | 教程位置 | 覆盖 |
+|---|---|---|---|
+| A 基线 | FP16 精度(PPL+下游)+性能基线 | s7 / M4-s3 对比基线 | ✓ |
+| B 量化配置 | **smoothing_strength(α) 核心旋钮** | **s6（本次补，原 group_size 偏离）** | △→✓ |
+| | targets / ignore（不量化层） | s5 + s1–s4 | ✓ |
+| | group_size（量化粒度） | s6（次） | ✓ |
+| | 校准数据（选择 + 数量 limit） | s5/s6 强化 | △→✓ |
+| C 量化执行 | oneshot → compressed-tensors | s5/s6 L3 + M2 | ✓ |
+| D 精度评估 | PPL + 下游(gsm8k) | s7 | ✓ |
+| | 敏感度分析 + layer fallback | s5 | ✓ |
+| | 调参扫描（α / group_size） | s6 | ✓ |
+| | 精度门槛 + 达标判定 | s7 强化 | △→✓ |
+| E 性能评估 | 吞吐/TTFT/TPOT/显存拆分/加速比 | M4-s3 + s7 | ✓ |
+| F 部署 | vLLM 声明式 + 多卡TP + 压测 + 报错 | M4-s1/s2/s3/s4 | ✓ |
+| G 交付 | 可复现四件套 | M4-s5 | ✓ |
+
+**核心缺口（本次补）**：**smoothing_strength(α) 调参**——SmoothQuant 的灵魂参数，控制激活离群点向权重迁移的程度，直接决定精度（α 太小激活压不住、α 太大权重误差大），工业上必扫 α 找最优。原 s6 用 group_size（W8A8 下次要，主要影响 scale 开销）偏离了 SmoothQuant 的核心调参。本次 s6 改以 smoothing_strength 为主、group_size 为次。
+
+**次要强化**：校准数据选择/数量影响（B）、精度门槛与达标判定（D）——在 s5/s6/s7 叙事里点明。
+
 ---
 
 ## 2. 排查结论（改动依据）
@@ -51,14 +75,14 @@
 | FP16 上界 | `models/Qwen2.5-7B-Instruct`（download） | 精度/性能参照上界 | — |
 | s5 全量化基线 | `out/s5_baseline/` | SmoothQuant 全量化（`ignore=()`），调优起点 | s5 L3 |
 | s5 调优后 | `out/s5_tuned/` | s5 拐点 k\*（`ignore=top-k* 敏感层`）后的模型 | s5 L3 |
-| s6 最终 | `out/s6_final/` | s6 在 s5_tuned 的 ignore 基础上选定 group_size 后的模型 | s6 L3 |
+| s6 最终 | `out/s6_final/` | s6 在 s5_tuned 的 ignore 基础上选定 smoothing_strength(α) + group_size 后的模型 | s6 L3 |
 
 s5 产出 baseline + tuned；s6 读 tuned 的 ignore 配方、产出 final；s7 读 baseline/tuned/final + FP16 做四向对比验证。缺产物时友好报错（不崩）。
 
 ### 三环节定位
 
 - **s5 — 敏感度比对 → 精度 Pareto**（保证**精度过线**）：SmoothQuant 全量化掉精度；逐层回退敏感层，回退带来的 PPL 恢复 = 该层量化敏感度（"比对各层敏感度"的工程化）；找"最少回退→最大精度"拐点 k\*。
-- **s6 — group_size 性能旋钮**（在精度达标基础上压**性能/显存**）：小 group_size 精度高但 scale 开销大。W8A8 下 group_size 主要影响 scale 开销（诚实讲，幅度不如 W4A16 戏剧）。
+- **s6 — SmoothQuant 调参：smoothing_strength（主）+ group_size（次）**（找精度最优 + 压性能/显存）：smoothing_strength(α) 是 SmoothQuant 灵魂旋钮——控制激活→权重迁移程度，α 太小激活离群点压不住、α 太大权重量化误差大，工业扫 α 找精度最优；group_size 是量化粒度旋钮（W8A8 下次要，主要影响 scale 开销）。工业实践 α 通常在量化初期调好，本 step 在 s5 ignore 基础上深入这个 SmoothQuant 特有旋钮。
 - **s7 — 验证调优收益**：对比 baseline（掉点）→ tuned（s5 ignore）→ final（s6 group_size）→ FP16，验证调优闭环的价值。
 
 ---
@@ -73,15 +97,15 @@ s5 产出 baseline + tuned；s6 读 tuned 的 ignore 配方、产出 final；s7 
 - **填空**（都业务型，保留）：`pareto_step` / `find_pareto_knee`。
 - **改**：① **拆测试**（每填空一 ipytest cell）；② 强化工业叙事（"已选定 SmoothQuant，逐层回退看 PPL 恢复 = 比对该层敏感度"）；③ L3 循环找拐点 k\* 后，把 **s5_baseline（ignore=()）+ s5_tuned（ignore=k\*）** 两个产物存到 `out/`，供 s6/s7 接力。
 
-### M3 s6 — group_size 性能旋钮（统一算法 + 重构填空）
+### M3 s6 — SmoothQuant 调参：smoothing_strength（主）+ group_size（次）
 
-- **算法**：L3 的 纯 QuantizationModifier(W4A16) → **SmoothQuantModifier + GPTQModifier(scheme="W8A8") + group_size**（通过 observer_kwargs 或 scheme group_size 传），与 s5 一致。
+- **算法**：L3 纯 QuantizationModifier(W4A16) → **SmoothQuantModifier(smoothing_strength=α) + GPTQModifier(targets="Linear", scheme="W8A8")**，扫 α（如 0.0/0.5/0.8/0.85/1.0）找精度最优；group_size 作为次要旋钮（W8A8 下影响 scale 开销）。
 - **填空**：
-  - `compare_group_sizes`（业务，保留；统一到 W8A8 语境）。
-  - `validate_group_size` → **归测试**（移出填空，整除/边界校验逻辑进 ipytest `pytest.raises` 断言）。
-  - **新增** `pick_group_size(hidden_size, candidates)`（业务型：从对比表选 group_size 拐点——scale 开销 vs 精度，W8A8 下主要看开销 + 合法性）。
-  - 结果：s6 仍 2 个业务填空。
-- **改**：① 算法统一 W8A8；② `validate` 归测试 + 新增 `pick`；③ **拆测试**；④ L3 **加测 PPL**（现状只测磁盘，加 PPL 体现"精度 vs scale 开销"权衡）；⑤ L3 读 s5_tuned 的 ignore 配方、产出 **s6_final** 到 `out/`；⑥ 叙事诚实说明 W8A8 下 group_size 主要影响 scale 开销。
+  - `compare_smoothing_strengths(alphas, ...)`（业务，**新增主填空**：扫 α，返回各 α 的平滑效果代理指标——激活/权重 scale 比值、是否充分平滑；L1/L2 用解析代理验，L3 真扫 α 测 PPL）。
+  - `pick_group_size(hidden_size, candidates)`（业务，**保留**：从 group_size 对比表选拐点——scale 开销 vs 精度，W8A8 下主要看开销 + 合法性；原 `compare_group_sizes` 的组装逻辑并入此函数辅助 / ipytest，避免重复）。
+  - `validate_group_size` → **归测试**（移出填空，整除/边界校验进 ipytest `pytest.raises`）。
+  - 结果：s6 仍 2 个业务填空（α 主 + group_size 次）。
+- **改**：① 算法统一 W8A8 + α 扫描；② 主填空 `compare_group_sizes` → `compare_smoothing_strengths`；③ `validate` 归测试；④ **拆测试**；⑤ L3 **加测 PPL**（扫 α + group_size 的精度对比，不只磁盘）；⑥ L3 读 s5_tuned 的 ignore 配方、用最优 α 产出 **s6_final** 到 `out/`；⑦ 叙事：α 是 SmoothQuant 灵魂参数（讲清太小/太大后果 + 工业扫描实践 + 校准数据影响），group_size 为次要旋钮。
 
 ### M3 s7 — 验证调优收益（重构对比维度）
 
@@ -146,7 +170,7 @@ s5 产出 baseline + tuned；s6 读 tuned 的 ignore 配方、产出 final；s7 
 
 ## 7. 算法统一细则（C 类）
 
-- **M3 quant env（重量化）**：所有 L3 真量化统一 `recipe = [SmoothQuantModifier(smoothing_strength=0.8), GPTQModifier(targets="Linear", scheme="W8A8", ignore=...)]`。s6 额外带 group_size。
+- **M3 quant env（重量化）**：所有 L3 真量化统一 `recipe = [SmoothQuantModifier(smoothing_strength=α), GPTQModifier(targets="Linear", scheme="W8A8", ignore=...)]`。s5 用默认 α=0.8；s6 扫 α（0.0–1.0）找最优 + 探索 group_size。
 - **M4 vllm env（不量化）**：所有"识别/构造/对比/选择/诊断"收敛到 SmoothQuant。讲解/样本里的 FP8/AWQ 多方法对比，降级为一句"其他量化方案见 M1/M2"或删除。
 - **跨 step scheme 一致**：M3 s5/s6/s7 的 W8A8 统一（修掉 s6 原 W4A8 与 s5 W8A8 的不一致）。
 
